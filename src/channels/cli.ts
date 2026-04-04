@@ -1,42 +1,49 @@
 /**
  * CLI Channel — Interactive terminal interface.
  *
- * Phase 6 upgrades:
- * - Session persistence: conversation saved to disk, resumed on restart
- * - Memory consolidation: after N turns, extracts key facts to memory.md
- * - New commands: /memory, /sessions, /load, /save
+ * Phase 2 rewrite: now a thin I/O adapter. The CLI channel:
+ *   1. Reads user input via readline
+ *   2. Publishes to the MessageBus inbound queue
+ *   3. Receives outbound messages (deltas + final) and writes to stdout
+ *
+ * All agent logic, session management, and memory consolidation now
+ * live in AgentLoop — the channel just handles terminal I/O.
+ *
+ * Slash commands that affect local config (/persona, /model, /config)
+ * are still handled here since they're channel-specific UI.
  */
 
 import readline from "node:readline";
-import { AgentRunner } from "../core/agent.js";
+import { MessageBus } from "../bus/queue.js";
 import { ContextBuilder } from "../core/context.js";
-import { Session } from "../core/session.js";
 import { Memory } from "../core/memory.js";
 import { SessionManager } from "../session/manager.js";
 import { AppConfig } from "../types.js";
 import { saveConfig } from "../config.js";
 import type { Channel } from "./base.js";
+import type { OutboundMessage } from "../bus/queue.js";
 
 const CLI_SESSION_ID = "cli";
+const CLI_CHAT_ID = "cli";
 
 export class CLIChannel implements Channel {
-  private agent: AgentRunner;
-  private session: Session;
+  readonly name = "cli";
+
+  private bus: MessageBus;
   private context: ContextBuilder;
   private memory: Memory;
   private sessionManager: SessionManager;
   private config: AppConfig;
   private rl: readline.Interface;
-  private turnCount: number = 0;
 
   constructor(
-    agent: AgentRunner,
+    bus: MessageBus,
     context: ContextBuilder,
     memory: Memory,
     sessionManager: SessionManager,
     config: AppConfig,
   ) {
-    this.agent = agent;
+    this.bus = bus;
     this.context = context;
     this.memory = memory;
     this.sessionManager = sessionManager;
@@ -46,20 +53,14 @@ export class CLIChannel implements Channel {
       input: process.stdin,
       output: process.stdout,
     });
-
-    // SessionManager handles load-from-disk automatically
-    this.session = this.sessionManager.getOrCreate(CLI_SESSION_ID, this.context.build());
-
-    const savedMsgs = this.session.getMessages();
-    if (savedMsgs.length > 1) {
-      console.log(`Resumed previous session (${savedMsgs.length} messages).`);
-      console.log('Use /clear to start fresh or /sessions to manage sessions.\n');
-    }
   }
 
   async start(): Promise<void> {
-    console.log("NanoBot v0.7 — Foundation Hardened");
+    console.log("NanoBot v0.8 — MessageBus Architecture");
     console.log('Type a message, or /help for commands. "exit" to quit.\n');
+
+    // Ensure session exists (SessionManager loads from disk automatically)
+    this.sessionManager.getOrCreate(CLI_SESSION_ID, this.context.build());
 
     const memContent = this.memory.readLongTermMemory();
     if (memContent) {
@@ -80,13 +81,30 @@ export class CLIChannel implements Channel {
     this.rl.close();
   }
 
+  private receivedDelta: boolean = false;
+
+  /** Called by ChannelManager when a final response arrives. */
+  async send(msg: OutboundMessage): Promise<void> {
+    if (!this.receivedDelta) {
+      // No streaming happened — print the full response
+      process.stdout.write(msg.content);
+    }
+    process.stdout.write("\n\n");
+    this.receivedDelta = false;
+  }
+
+  /** Called by ChannelManager for each streaming chunk. */
+  async sendDelta(msg: OutboundMessage): Promise<void> {
+    this.receivedDelta = true;
+    process.stdout.write(msg.content);
+  }
+
   private promptLoop(): void {
     this.rl.question("You: ", async (input) => {
       const trimmed = input.trim();
 
       if (trimmed.toLowerCase() === "exit") {
         this.sessionManager.save(CLI_SESSION_ID);
-        await this.consolidateMemory();
         console.log("Session saved. Goodbye!");
         this.rl.close();
         return;
@@ -103,83 +121,47 @@ export class CLIChannel implements Channel {
         return;
       }
 
-      try {
-        this.refreshSystemPrompt();
-        this.session.addMessage("user", trimmed);
+      // Publish to the bus — AgentLoop will handle the rest
+      process.stdout.write("\nBot: ");
+      this.bus.publishInbound({
+        channel: this.name,
+        sessionKey: CLI_SESSION_ID,
+        chatId: CLI_CHAT_ID,
+        senderName: "User",
+        content: trimmed,
+      });
 
-        process.stdout.write("\nBot: ");
-
-        const response = await this.agent.run(
-          this.session.getMessages(),
-          (chunk) => process.stdout.write(chunk),
-        );
-
-        process.stdout.write("\n\n");
-        this.session.addMessage("assistant", response);
-        this.turnCount++;
-
-        // Auto-save session after each turn
-        this.sessionManager.save(CLI_SESSION_ID);
-
-        // Check if we should consolidate memory
-        if (this.sessionManager.shouldConsolidate(CLI_SESSION_ID)) {
-          await this.consolidateMemory();
-        }
-      } catch (error) {
-        if (error instanceof Error) {
-          console.error(`\nError: ${error.message}\n`);
-        } else {
-          console.error("\nAn unexpected error occurred.\n");
-        }
-      }
+      // Wait for the final response before showing next prompt
+      await this.waitForResponse(CLI_CHAT_ID);
 
       this.promptLoop();
     });
   }
 
   /**
-   * Memory consolidation: ask the LLM to extract key facts from the
-   * conversation and save them to memory.md.
+   * Wait for the final outbound message for this chat.
+   * Deltas are handled by sendDelta() called from ChannelManager;
+   * we just need to know when the final message arrives.
    */
-  private async consolidateMemory(): Promise<void> {
-    const unconsolidated = this.sessionManager.getUnconsolidatedMessages(CLI_SESSION_ID);
-    if (unconsolidated.length < 2) return;
+  private waitForResponse(chatId: string): Promise<void> {
+    return new Promise((resolve) => {
+      this._pendingResolve = resolve;
+    });
+  }
 
-    try {
-      process.stdout.write("  [Consolidating memory...]\n");
+  /** Resolve stored by waitForResponse, called when send() fires. */
+  _pendingResolve: (() => void) | null = null;
 
-      const currentMemory = this.memory.readLongTermMemory();
-      const consolidationMessages = this.memory.buildConsolidationPrompt(
-        currentMemory,
-        unconsolidated,
-      );
-
-      const updatedMemory = await this.agent.chatDirect(consolidationMessages);
-
-      if (updatedMemory && updatedMemory.trim()) {
-        this.memory.writeLongTermMemory(updatedMemory.trim());
-        this.memory.appendHistory(unconsolidated);
-        this.sessionManager.markConsolidated(CLI_SESSION_ID);
-        console.log("  [Memory updated]\n");
-      }
-    } catch (error) {
-      // Fallback: still log to history even if LLM consolidation fails
-      this.memory.appendHistory(unconsolidated);
-      this.sessionManager.markConsolidated(CLI_SESSION_ID);
-      console.error("  [Memory consolidation failed — history saved]\n");
+  /** Called by ChannelManager to signal response complete. */
+  notifyResponseComplete(): void {
+    if (this._pendingResolve) {
+      const resolve = this._pendingResolve;
+      this._pendingResolve = null;
+      resolve();
     }
   }
 
-  private refreshSystemPrompt(): void {
-    const messages = this.session.getMessages();
-    this.session.clear();
-    this.session.addMessage("system", this.context.build());
-    for (const msg of messages) {
-      if (msg.role !== "system") {
-        this.session.addMessage(msg.role, msg.content);
-      }
-    }
-  }
+  // ── Slash Commands (channel-local UI) ────────────────────────
 
   private async handleCommand(input: string): Promise<void> {
     const parts = input.slice(1).split(/\s+/);
@@ -211,9 +193,6 @@ export class CLIChannel implements Channel {
       case "sessions":
         this.listSessions();
         break;
-      case "remember":
-        await this.consolidateMemory();
-        break;
       case "save":
         this.sessionManager.save(CLI_SESSION_ID);
         console.log("\nSession saved.\n");
@@ -232,18 +211,16 @@ Available commands:
   /config            — Show current configuration
   /model <name>      — Switch the Azure OpenAI deployment name
   /memory            — Show what the bot remembers about you
-  /remember          — Save memories now (without waiting for auto)
   /forget            — Clear all long-term memory
   /sessions          — List saved sessions
   /save              — Save current session to disk
-  exit               — Save memories + session, then quit
+  exit               — Save session, then quit
 `);
   }
 
   private clearSession(): void {
     this.sessionManager.clear(CLI_SESSION_ID);
-    this.session = this.sessionManager.getOrCreate(CLI_SESSION_ID, this.context.build());
-    this.turnCount = 0;
+    this.sessionManager.getOrCreate(CLI_SESSION_ID, this.context.build());
     console.log("\nConversation cleared.\n");
   }
 
@@ -253,12 +230,11 @@ Available commands:
       console.log('Usage: /persona <new persona text>\n');
       return;
     }
-
     this.context.setPersona(text);
     this.config.persona = text;
     saveConfig(this.config);
-    this.session.clear();
-    this.session.addMessage("system", this.context.build());
+    this.sessionManager.clear(CLI_SESSION_ID);
+    this.sessionManager.getOrCreate(CLI_SESSION_ID, this.context.build());
     console.log(`\nPersona updated and saved. Conversation cleared.\n`);
   }
 

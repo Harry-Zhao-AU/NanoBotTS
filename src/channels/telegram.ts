@@ -1,40 +1,55 @@
 /**
  * Telegram Channel — Telegram Bot interface.
  *
- * Phase 6 upgrades:
- * - Per-user session persistence (survives bot restarts)
- * - Memory consolidation for Telegram users too
- * - Sessions stored as data/sessions/tg_<chatId>.jsonl
+ * Phase 2 rewrite: now a thin I/O adapter. The Telegram channel:
+ *   1. Receives messages via Telegraf
+ *   2. Publishes to the MessageBus inbound queue
+ *   3. Receives outbound messages and sends/edits Telegram messages
+ *
+ * All agent logic, session management, and memory consolidation now
+ * live in AgentLoop.
  */
 
 import { Telegraf } from "telegraf";
 import { message } from "telegraf/filters";
 import type { Channel } from "./base.js";
-import { AgentRunner } from "../core/agent.js";
-import { ContextBuilder } from "../core/context.js";
-import { Session } from "../core/session.js";
+import type { OutboundMessage } from "../bus/queue.js";
+import { MessageBus } from "../bus/queue.js";
 import { Memory } from "../core/memory.js";
 import { SessionManager } from "../session/manager.js";
+import { ContextBuilder } from "../core/context.js";
 
 const EDIT_THROTTLE_MS = 1000;
 
+/** Tracks the state of a streaming response per chat */
+interface StreamState {
+  messageId: number;
+  accumulated: string;
+  lastEditTime: number;
+}
+
 export class TelegramChannel implements Channel {
+  readonly name = "telegram";
+
   private bot: Telegraf;
-  private agent: AgentRunner;
-  private context: ContextBuilder;
+  private bus: MessageBus;
   private memory: Memory;
   private sessionManager: SessionManager;
+  private context: ContextBuilder;
   private botName: string = "NanoBot";
+
+  /** Active streaming states per chatId */
+  private streams: Map<string, StreamState> = new Map();
 
   constructor(
     token: string,
-    agent: AgentRunner,
+    bus: MessageBus,
     context: ContextBuilder,
     memory: Memory,
     sessionManager: SessionManager,
   ) {
     this.bot = new Telegraf(token);
-    this.agent = agent;
+    this.bus = bus;
     this.context = context;
     this.memory = memory;
     this.sessionManager = sessionManager;
@@ -58,7 +73,65 @@ export class TelegramChannel implements Channel {
   async stop(): Promise<void> {
     this.sessionManager.saveAll();
     this.bot.stop("NanoBot shutting down");
-    console.log("Telegram bot stopped. Sessions and memory saved.");
+    console.log("Telegram bot stopped. Sessions saved.");
+  }
+
+  /** Called by ChannelManager when a final response arrives. */
+  async send(msg: OutboundMessage): Promise<void> {
+    const stream = this.streams.get(msg.chatId);
+    if (stream) {
+      // Edit the streaming message with the final content
+      try {
+        await this.bot.telegram.editMessageText(
+          Number(msg.chatId),
+          stream.messageId,
+          undefined,
+          msg.content,
+        );
+      } catch {
+        // If edit fails, send as new message
+        await this.bot.telegram.sendMessage(Number(msg.chatId), msg.content);
+      }
+      this.streams.delete(msg.chatId);
+    } else {
+      // No streaming happened — just send the message
+      await this.bot.telegram.sendMessage(Number(msg.chatId), msg.content);
+    }
+  }
+
+  /** Called by ChannelManager for each streaming chunk. */
+  async sendDelta(msg: OutboundMessage): Promise<void> {
+    const chatId = msg.chatId;
+    let stream = this.streams.get(chatId);
+
+    if (!stream) {
+      // First delta — send a placeholder message to edit later
+      try {
+        const sent = await this.bot.telegram.sendMessage(Number(chatId), "...");
+        stream = {
+          messageId: sent.message_id,
+          accumulated: "",
+          lastEditTime: 0,
+        };
+        this.streams.set(chatId, stream);
+      } catch {
+        return; // Can't send — skip this delta
+      }
+    }
+
+    stream.accumulated += msg.content;
+
+    // Throttle edits to avoid Telegram rate limits
+    const now = Date.now();
+    if (now - stream.lastEditTime >= EDIT_THROTTLE_MS) {
+      stream.lastEditTime = now;
+      this.bot.telegram.editMessageText(
+        Number(chatId),
+        stream.messageId,
+        undefined,
+        stream.accumulated + " ...",
+      ).catch(() => {});
+    }
   }
 
   private setupHandlers(): void {
@@ -109,92 +182,17 @@ export class TelegramChannel implements Channel {
 
       console.log(`\n[@${this.botName}] ${userName}: ${userMessage}`);
 
-      const session = this.sessionManager.getOrCreate(sessionKey, this.context.build());
-      session.addMessage("user", userMessage);
+      // Ensure session exists
+      this.sessionManager.getOrCreate(sessionKey, this.context.build());
 
-      try {
-        const sentMsg = await ctx.reply("...");
-
-        let fullResponse = "";
-        let lastEditTime = 0;
-        let streamStarted = false;
-
-        process.stdout.write(`[@${this.botName}] Bot: `);
-        const response = await this.agent.run(
-          session.getMessages(),
-          (chunk) => {
-            fullResponse += chunk;
-            streamStarted = true;
-            process.stdout.write(chunk);
-
-            const now = Date.now();
-            if (now - lastEditTime >= EDIT_THROTTLE_MS) {
-              lastEditTime = now;
-              ctx.telegram.editMessageText(
-                chatId,
-                sentMsg.message_id,
-                undefined,
-                fullResponse + " ...",
-              ).catch(() => {});
-            }
-          },
-        );
-
-        const finalText = response || fullResponse || "I couldn't generate a response.";
-        await ctx.telegram.editMessageText(
-          chatId,
-          sentMsg.message_id,
-          undefined,
-          finalText,
-        ).catch(() => {
-          ctx.reply(finalText);
-        });
-
-        if (!streamStarted) {
-          console.log(finalText);
-        } else {
-          process.stdout.write("\n");
-        }
-
-        session.addMessage("assistant", finalText);
-
-        // Auto-save session
-        this.sessionManager.save(sessionKey);
-
-        // Check if we should consolidate memory
-        if (this.sessionManager.shouldConsolidate(sessionKey)) {
-          await this.consolidateMemory(sessionKey);
-        }
-      } catch (error) {
-        const errMsg = error instanceof Error ? error.message : "Unknown error";
-        console.error(`[@${this.botName}] Error (chat ${chatId}): ${errMsg}`);
-        ctx.reply(`Sorry, an error occurred: ${errMsg}`);
-      }
+      // Publish to bus — AgentLoop handles the rest
+      this.bus.publishInbound({
+        channel: this.name,
+        sessionKey,
+        chatId: String(chatId),
+        senderName: userName,
+        content: userMessage,
+      });
     });
-  }
-
-  private async consolidateMemory(sessionKey: string): Promise<void> {
-    const unconsolidated = this.sessionManager.getUnconsolidatedMessages(sessionKey);
-    if (unconsolidated.length < 2) return;
-
-    try {
-      console.log("  [Consolidating memory...]");
-      const currentMemory = this.memory.readLongTermMemory();
-      const consolidationMessages = this.memory.buildConsolidationPrompt(
-        currentMemory,
-        unconsolidated,
-      );
-      const updatedMemory = await this.agent.chatDirect(consolidationMessages);
-      if (updatedMemory && updatedMemory.trim()) {
-        this.memory.writeLongTermMemory(updatedMemory.trim());
-        this.memory.appendHistory(unconsolidated);
-        this.sessionManager.markConsolidated(sessionKey);
-        console.log("  [Memory updated]");
-      }
-    } catch {
-      this.memory.appendHistory(unconsolidated);
-      this.sessionManager.markConsolidated(sessionKey);
-      console.error("  [Memory consolidation failed — history saved]");
-    }
   }
 }

@@ -1,7 +1,12 @@
 /**
  * NanoBotTS — Entry Point
  *
- * Phase 6: Persistent memory and session storage.
+ * Phase 2: MessageBus architecture.
+ *
+ * Components are wired together:
+ *   MessageBus ← channels publish inbound, AgentLoop publishes outbound
+ *   AgentLoop  ← consumes inbound, runs agent, publishes outbound
+ *   ChannelManager ← consumes outbound, routes to correct channel
  *
  * Usage:
  *   npm start                         — CLI mode (default)
@@ -18,9 +23,11 @@ import { AgentRunner } from "./core/agent.js";
 import { ContextBuilder } from "./core/context.js";
 import { Memory } from "./core/memory.js";
 import { SessionManager } from "./session/manager.js";
+import { MessageBus } from "./bus/queue.js";
+import { AgentLoop } from "./core/loop.js";
+import { ChannelManager } from "./channels/manager.js";
 import { CLIChannel } from "./channels/cli.js";
 import { TelegramChannel } from "./channels/telegram.js";
-import type { Channel } from "./channels/base.js";
 
 function parseChannelArg(): string {
   const idx = process.argv.indexOf("--channel");
@@ -33,33 +40,41 @@ function parseChannelArg(): string {
 async function main() {
   const config = loadConfig();
 
+  // Provider
   const provider = new AzureOpenAIProvider(
     config.provider,
     config.agent.temperature,
     config.agent.maxTokens,
   );
 
+  // Tools
   const toolRegistry = new ToolRegistry();
   toolRegistry.register(new TimeTool());
   toolRegistry.register(new WebSearchTool());
-
   console.log(`Tools: ${toolRegistry.getToolNames().join(", ")}`);
 
-  // Create memory and session systems
+  // Core systems
   const memory = new Memory();
   const sessionManager = new SessionManager();
-
-  // Context builder now includes memory
   const context = new ContextBuilder(config.persona, toolRegistry, memory);
-
   const agent = new AgentRunner(provider, toolRegistry, config.agent.maxIterations);
 
-  // Start channels
+  // Bus — the backbone connecting channels ↔ agent
+  const bus = new MessageBus();
+
+  // AgentLoop — central orchestrator
+  const agentLoop = new AgentLoop(bus, agent, context, memory, sessionManager);
+
+  // ChannelManager — routes outbound messages to channels
+  const channelManager = new ChannelManager(bus);
+
+  // Register channels
   const channelArg = parseChannelArg();
-  const channels: Channel[] = [];
 
   if (channelArg === "cli" || channelArg === "all") {
-    channels.push(new CLIChannel(agent, context, memory, sessionManager, config));
+    channelManager.register(
+      new CLIChannel(bus, context, memory, sessionManager, config),
+    );
   }
 
   if (channelArg === "telegram" || channelArg === "all") {
@@ -68,23 +83,33 @@ async function main() {
       console.error("Add TELEGRAM_BOT_TOKEN to your .env file.");
       process.exit(1);
     }
-    channels.push(new TelegramChannel(config.channels.telegram.token, agent, context, memory, sessionManager));
+    channelManager.register(
+      new TelegramChannel(
+        config.channels.telegram.token,
+        bus,
+        context,
+        memory,
+        sessionManager,
+      ),
+    );
   }
 
-  if (channels.length === 0) {
-    console.error(`Unknown channel: "${channelArg}". Use: cli, telegram, or all`);
-    process.exit(1);
-  }
+  // Start everything
+  // AgentLoop runs in background (non-blocking infinite loop)
+  agentLoop.start();
 
-  await Promise.all(
-    channels.map((ch) =>
-      ch.start().catch((err) => {
-        const name = ch.constructor.name;
-        console.error(`\n${name} failed to start: ${err.message}`);
-        console.error("Other channels will continue running.\n");
-      }),
-    ),
-  );
+  // ChannelManager starts channels + outbound dispatch loop
+  await channelManager.startAll();
+
+  // Graceful shutdown
+  const shutdown = async () => {
+    agentLoop.stop();
+    await channelManager.stopAll();
+    process.exit(0);
+  };
+
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
 }
 
 main().catch((error) => {
