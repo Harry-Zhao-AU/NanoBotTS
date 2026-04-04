@@ -12,6 +12,7 @@ import { AgentRunner } from "../core/agent.js";
 import { ContextBuilder } from "../core/context.js";
 import { Session } from "../core/session.js";
 import { Memory } from "../core/memory.js";
+import { SessionManager } from "../session/manager.js";
 import { AppConfig } from "../types.js";
 import { saveConfig } from "../config.js";
 import type { Channel } from "./base.js";
@@ -23,37 +24,41 @@ export class CLIChannel implements Channel {
   private session: Session;
   private context: ContextBuilder;
   private memory: Memory;
+  private sessionManager: SessionManager;
   private config: AppConfig;
   private rl: readline.Interface;
   private turnCount: number = 0;
 
-  constructor(agent: AgentRunner, context: ContextBuilder, memory: Memory, config: AppConfig) {
+  constructor(
+    agent: AgentRunner,
+    context: ContextBuilder,
+    memory: Memory,
+    sessionManager: SessionManager,
+    config: AppConfig,
+  ) {
     this.agent = agent;
     this.context = context;
     this.memory = memory;
+    this.sessionManager = sessionManager;
     this.config = config;
-    this.session = new Session();
 
     this.rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout,
     });
 
-    // Try to resume previous CLI session
-    const savedMessages = this.memory.loadSession(CLI_SESSION_ID);
-    if (savedMessages.length > 0) {
-      for (const msg of savedMessages) {
-        this.session.addMessage(msg.role, msg.content);
-      }
-      console.log(`Resumed previous session (${savedMessages.length} messages).`);
+    // SessionManager handles load-from-disk automatically
+    this.session = this.sessionManager.getOrCreate(CLI_SESSION_ID, this.context.build());
+
+    const savedMsgs = this.session.getMessages();
+    if (savedMsgs.length > 1) {
+      console.log(`Resumed previous session (${savedMsgs.length} messages).`);
       console.log('Use /clear to start fresh or /sessions to manage sessions.\n');
-    } else {
-      this.session.addMessage("system", this.context.build());
     }
   }
 
   async start(): Promise<void> {
-    console.log("🤖 NanoBot v0.6 — With Memory");
+    console.log("NanoBot v0.7 — Foundation Hardened");
     console.log('Type a message, or /help for commands. "exit" to quit.\n');
 
     const memContent = this.memory.readLongTermMemory();
@@ -62,9 +67,8 @@ export class CLIChannel implements Channel {
     }
 
     this.rl.on("close", () => {
-      // Auto-save session on exit
-      this.saveCurrentSession();
-      console.log("\nSession saved. Goodbye! 👋");
+      this.sessionManager.save(CLI_SESSION_ID);
+      console.log("\nSession saved. Goodbye!");
       process.exit(0);
     });
 
@@ -72,7 +76,7 @@ export class CLIChannel implements Channel {
   }
 
   async stop(): Promise<void> {
-    this.saveCurrentSession();
+    this.sessionManager.save(CLI_SESSION_ID);
     this.rl.close();
   }
 
@@ -81,9 +85,9 @@ export class CLIChannel implements Channel {
       const trimmed = input.trim();
 
       if (trimmed.toLowerCase() === "exit") {
-        this.saveCurrentSession();
+        this.sessionManager.save(CLI_SESSION_ID);
         await this.consolidateMemory();
-        console.log("Session saved. Goodbye! 👋");
+        console.log("Session saved. Goodbye!");
         this.rl.close();
         return;
       }
@@ -115,10 +119,10 @@ export class CLIChannel implements Channel {
         this.turnCount++;
 
         // Auto-save session after each turn
-        this.saveCurrentSession();
+        this.sessionManager.save(CLI_SESSION_ID);
 
         // Check if we should consolidate memory
-        if (this.memory.shouldConsolidate(this.session.getMessages())) {
+        if (this.sessionManager.shouldConsolidate(CLI_SESSION_ID)) {
           await this.consolidateMemory();
         }
       } catch (error) {
@@ -138,9 +142,8 @@ export class CLIChannel implements Channel {
    * conversation and save them to memory.md.
    */
   private async consolidateMemory(): Promise<void> {
-    // Skip if there's barely any conversation to consolidate
-    const userMsgCount = this.session.getMessages().filter((m) => m.role === "user").length;
-    if (userMsgCount < 2) return;
+    const unconsolidated = this.sessionManager.getUnconsolidatedMessages(CLI_SESSION_ID);
+    if (unconsolidated.length < 2) return;
 
     try {
       process.stdout.write("  [Consolidating memory...]\n");
@@ -148,26 +151,22 @@ export class CLIChannel implements Channel {
       const currentMemory = this.memory.readLongTermMemory();
       const consolidationMessages = this.memory.buildConsolidationPrompt(
         currentMemory,
-        this.session.getMessages(),
+        unconsolidated,
       );
 
-      // Use the agent's provider to call the LLM for consolidation
       const updatedMemory = await this.agent.chatDirect(consolidationMessages);
 
       if (updatedMemory && updatedMemory.trim()) {
         this.memory.writeLongTermMemory(updatedMemory.trim());
+        this.memory.appendHistory(unconsolidated);
+        this.sessionManager.markConsolidated(CLI_SESSION_ID);
         console.log("  [Memory updated]\n");
       }
     } catch (error) {
-      // Non-fatal — memory consolidation failing shouldn't break the chat
-      console.error("  [Memory consolidation failed — continuing normally]\n");
-    }
-  }
-
-  private saveCurrentSession(): void {
-    const messages = this.session.getMessages();
-    if (messages.length > 1) { // more than just the system prompt
-      this.memory.saveSession(CLI_SESSION_ID, messages);
+      // Fallback: still log to history even if LLM consolidation fails
+      this.memory.appendHistory(unconsolidated);
+      this.sessionManager.markConsolidated(CLI_SESSION_ID);
+      console.error("  [Memory consolidation failed — history saved]\n");
     }
   }
 
@@ -216,7 +215,7 @@ export class CLIChannel implements Channel {
         await this.consolidateMemory();
         break;
       case "save":
-        this.saveCurrentSession();
+        this.sessionManager.save(CLI_SESSION_ID);
         console.log("\nSession saved.\n");
         break;
       default:
@@ -242,9 +241,8 @@ Available commands:
   }
 
   private clearSession(): void {
-    this.session.clear();
-    this.session.addMessage("system", this.context.build());
-    this.memory.deleteSession(CLI_SESSION_ID);
+    this.sessionManager.clear(CLI_SESSION_ID);
+    this.session = this.sessionManager.getOrCreate(CLI_SESSION_ID, this.context.build());
     this.turnCount = 0;
     console.log("\nConversation cleared.\n");
   }
@@ -306,16 +304,14 @@ Current configuration:
   }
 
   private listSessions(): void {
-    const sessions = this.memory.listSessions();
+    const sessions = this.sessionManager.listSessions();
     if (sessions.length === 0) {
       console.log("\nNo saved sessions.\n");
       return;
     }
     console.log(`\nSaved sessions:`);
     for (const id of sessions) {
-      const msgs = this.memory.loadSession(id);
-      const userMsgs = msgs.filter((m) => m.role === "user").length;
-      console.log(`  ${id} — ${userMsgs} user messages`);
+      console.log(`  ${id}`);
     }
     console.log();
   }

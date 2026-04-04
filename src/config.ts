@@ -34,7 +34,7 @@ const DEFAULTS: AppConfig = {
     apiVersion: "2024-10-21",
   },
   agent: {
-    maxIterations: 10,
+    maxIterations: 200,
     temperature: 0.7,
     maxTokens: 2000,
   },

@@ -19,6 +19,8 @@ import { Tool, ToolParameters } from "./base.js";
 
 export class WebSearchTool implements Tool {
   name = "web_search";
+  readOnly = true;
+  concurrencySafe = true;
 
   description = "Search the web for current information. Use this when the user asks about recent events, facts you're unsure about, or anything that requires up-to-date information.";
 

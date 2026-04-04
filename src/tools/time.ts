@@ -16,6 +16,8 @@ import { Tool, ToolParameters } from "./base.js";
 
 export class TimeTool implements Tool {
   name = "get_current_time";
+  readOnly = true;
+  concurrencySafe = true;
 
   description = "Get the current date and time. Optionally specify a timezone (e.g., 'America/New_York', 'Asia/Shanghai', 'Europe/London').";
 

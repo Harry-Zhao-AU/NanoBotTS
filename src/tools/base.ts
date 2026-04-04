@@ -38,6 +38,12 @@ export interface Tool {
   /** JSON Schema describing the arguments this tool accepts */
   parameters: ToolParameters;
 
+  /** If true, this tool only reads data and has no side effects */
+  readOnly?: boolean;
+
+  /** If true, multiple instances of this tool can run in parallel safely */
+  concurrencySafe?: boolean;
+
   /** Execute the tool with the given arguments and return a string result */
   execute(args: Record<string, unknown>): Promise<string>;
 }
@@ -67,6 +73,12 @@ export function toOpenAITool(tool: Tool): ChatCompletionTool {
  * 1. Get all tool schemas → pass to the LLM so it knows what's available.
  * 2. Look up a tool by name → execute it when the LLM requests it.
  */
+/** Result of prepareCall — validated and cast args ready for execution */
+export interface PreparedToolCall {
+  tool: Tool;
+  args: Record<string, unknown>;
+}
+
 export class ToolRegistry {
   private tools: Map<string, Tool> = new Map();
 
@@ -91,5 +103,106 @@ export class ToolRegistry {
   /** Get the names of all registered tools. */
   getToolNames(): string[] {
     return Array.from(this.tools.keys());
+  }
+
+  /**
+   * Validate arguments against a tool's JSON Schema parameters.
+   * Checks required fields and basic type matching.
+   */
+  validate(toolName: string, args: Record<string, unknown>): string[] {
+    const tool = this.tools.get(toolName);
+    if (!tool) return [`Unknown tool: "${toolName}"`];
+
+    const errors: string[] = [];
+    const schema = tool.parameters;
+    const required = (schema.required as string[]) || [];
+    const properties = (schema.properties as Record<string, { type?: string }>) || {};
+
+    // Check required fields
+    for (const field of required) {
+      if (args[field] === undefined || args[field] === null) {
+        errors.push(`Missing required parameter: "${field}"`);
+      }
+    }
+
+    // Check types for provided fields
+    for (const [key, value] of Object.entries(args)) {
+      const propSchema = properties[key];
+      if (!propSchema) continue; // extra fields are ok
+      if (propSchema.type && value !== undefined && value !== null) {
+        const actual = typeof value;
+        const expected = propSchema.type;
+        if (expected === "string" && actual !== "string") {
+          errors.push(`Parameter "${key}" should be string, got ${actual}`);
+        } else if (expected === "number" && actual !== "number") {
+          errors.push(`Parameter "${key}" should be number, got ${actual}`);
+        } else if (expected === "boolean" && actual !== "boolean") {
+          errors.push(`Parameter "${key}" should be boolean, got ${actual}`);
+        }
+      }
+    }
+
+    return errors;
+  }
+
+  /**
+   * Cast argument values to match the types declared in the tool's JSON Schema.
+   * LLMs sometimes send numbers as strings — this fixes that.
+   */
+  castParams(toolName: string, args: Record<string, unknown>): Record<string, unknown> {
+    const tool = this.tools.get(toolName);
+    if (!tool) return args;
+
+    const properties = (tool.parameters.properties as Record<string, { type?: string }>) || {};
+    const result = { ...args };
+
+    for (const [key, value] of Object.entries(result)) {
+      const propSchema = properties[key];
+      if (!propSchema?.type || value === undefined || value === null) continue;
+
+      if (propSchema.type === "number" && typeof value === "string") {
+        const num = Number(value);
+        if (!isNaN(num)) result[key] = num;
+      } else if (propSchema.type === "boolean" && typeof value === "string") {
+        result[key] = value === "true";
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * Resolve, cast, and validate a tool call in one step.
+   * Returns a PreparedToolCall ready for execution, or throws on error.
+   */
+  prepareCall(toolName: string, rawArgs: string): PreparedToolCall {
+    const tool = this.tools.get(toolName);
+    if (!tool) {
+      throw new Error(`Unknown tool: "${toolName}"`);
+    }
+
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(rawArgs);
+    } catch {
+      throw new Error(`Invalid JSON arguments for tool "${toolName}": ${rawArgs}`);
+    }
+
+    const args = this.castParams(toolName, parsed);
+    const errors = this.validate(toolName, args);
+    if (errors.length > 0) {
+      throw new Error(`Validation failed for tool "${toolName}": ${errors.join("; ")}`);
+    }
+
+    return { tool, args };
+  }
+
+  /**
+   * Execute a tool by name with raw JSON arguments string.
+   * Handles parsing, casting, validation, and execution in one call.
+   */
+  async execute(toolName: string, rawArgs: string): Promise<string> {
+    const { tool, args } = this.prepareCall(toolName, rawArgs);
+    return tool.execute(args);
   }
 }

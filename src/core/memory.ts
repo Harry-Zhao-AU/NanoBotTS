@@ -30,6 +30,7 @@ import { Message } from "../types.js";
 
 const DATA_DIR = path.resolve("data");
 const MEMORY_FILE = path.join(DATA_DIR, "memory.md");
+const HISTORY_FILE = path.join(DATA_DIR, "history.md");
 const SESSIONS_DIR = path.join(DATA_DIR, "sessions");
 
 export class Memory {
@@ -64,6 +65,39 @@ export class Memory {
    */
   writeLongTermMemory(content: string): void {
     fs.writeFileSync(MEMORY_FILE, content, "utf-8");
+  }
+
+  // ── History Log (history.md) ─────────────────────────────────
+
+  /**
+   * Append a timestamped entry to the searchable history log.
+   * Unlike memory.md (which is LLM-consolidated and concise),
+   * history.md is a chronological append-only log you can grep through.
+   */
+  appendHistory(messages: Message[]): void {
+    const timestamp = new Date().toISOString();
+    const entries = messages
+      .filter((m) => m.role === "user" || m.role === "assistant")
+      .map((m) => `[${m.role}] ${m.content}`)
+      .join("\n");
+
+    if (!entries) return;
+
+    const block = `\n---\n### ${timestamp}\n${entries}\n`;
+    fs.appendFileSync(HISTORY_FILE, block, "utf-8");
+  }
+
+  /** Read the full history log. Returns empty string if no history exists. */
+  readHistory(): string {
+    if (!fs.existsSync(HISTORY_FILE)) return "";
+    return fs.readFileSync(HISTORY_FILE, "utf-8").trim();
+  }
+
+  /** Clear the history log. */
+  clearHistory(): void {
+    if (fs.existsSync(HISTORY_FILE)) {
+      fs.writeFileSync(HISTORY_FILE, "", "utf-8");
+    }
   }
 
   /**

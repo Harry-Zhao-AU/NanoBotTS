@@ -17,6 +17,7 @@ import { WebSearchTool } from "./tools/web-search.js";
 import { AgentRunner } from "./core/agent.js";
 import { ContextBuilder } from "./core/context.js";
 import { Memory } from "./core/memory.js";
+import { SessionManager } from "./session/manager.js";
 import { CLIChannel } from "./channels/cli.js";
 import { TelegramChannel } from "./channels/telegram.js";
 import type { Channel } from "./channels/base.js";
@@ -44,8 +45,9 @@ async function main() {
 
   console.log(`Tools: ${toolRegistry.getToolNames().join(", ")}`);
 
-  // Create memory system
+  // Create memory and session systems
   const memory = new Memory();
+  const sessionManager = new SessionManager();
 
   // Context builder now includes memory
   const context = new ContextBuilder(config.persona, toolRegistry, memory);
@@ -57,7 +59,7 @@ async function main() {
   const channels: Channel[] = [];
 
   if (channelArg === "cli" || channelArg === "all") {
-    channels.push(new CLIChannel(agent, context, memory, config));
+    channels.push(new CLIChannel(agent, context, memory, sessionManager, config));
   }
 
   if (channelArg === "telegram" || channelArg === "all") {
@@ -66,7 +68,7 @@ async function main() {
       console.error("Add TELEGRAM_BOT_TOKEN to your .env file.");
       process.exit(1);
     }
-    channels.push(new TelegramChannel(config.channels.telegram.token, agent, context, memory));
+    channels.push(new TelegramChannel(config.channels.telegram.token, agent, context, memory, sessionManager));
   }
 
   if (channels.length === 0) {

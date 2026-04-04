@@ -28,6 +28,7 @@
 import { AzureOpenAIProvider } from "../providers/azure-openai.js";
 import { ToolRegistry } from "../tools/base.js";
 import { Message, ToolCall, AssistantMessage, ToolResultMessage } from "../types.js";
+import { estimateTotalTokens, truncateToTokenBudget } from "../utils/tokens.js";
 
 /** Callback for streaming chunks to the caller */
 export type StreamCallback = (chunk: string) => void;
@@ -36,15 +37,23 @@ export class AgentRunner {
   private provider: AzureOpenAIProvider;
   private toolRegistry: ToolRegistry;
   private maxIterations: number;
+  /** Max tokens for the full context window (prompt + response) */
+  private contextBudget: number;
+  /** Max tokens for a single tool result before truncation */
+  private toolResultBudget: number;
 
   constructor(
     provider: AzureOpenAIProvider,
     toolRegistry: ToolRegistry,
-    maxIterations: number = 10,
+    maxIterations: number = 200,
+    contextBudget: number = 120000,
+    toolResultBudget: number = 8000,
   ) {
     this.provider = provider;
     this.toolRegistry = toolRegistry;
     this.maxIterations = maxIterations;
+    this.contextBudget = contextBudget;
+    this.toolResultBudget = toolResultBudget;
   }
 
   /**
@@ -61,6 +70,9 @@ export class AgentRunner {
     const tools = this.toolRegistry.getOpenAITools();
 
     for (let i = 0; i < this.maxIterations; i++) {
+      // Trim history if approaching context window limit
+      this.snipHistory(messages);
+
       // Call the LLM with the current messages and available tools
       const response = await this.provider.chatWithTools(messages, tools);
 
@@ -78,7 +90,8 @@ export class AgentRunner {
 
         // Execute each tool and add results to history
         for (const toolCall of response.toolCalls) {
-          const result = await this.executeTool(toolCall);
+          let result = await this.executeTool(toolCall);
+          result = this.applyToolResultBudget(result);
 
           const toolResultMsg: ToolResultMessage = {
             role: "tool",
@@ -116,21 +129,45 @@ export class AgentRunner {
 
   /** Execute a single tool call and return the result string. */
   private async executeTool(toolCall: ToolCall): Promise<string> {
-    const tool = this.toolRegistry.get(toolCall.function.name);
-
-    if (!tool) {
-      return `Error: Unknown tool "${toolCall.function.name}"`;
-    }
-
     try {
-      // Parse the arguments JSON string into an object
-      const args = JSON.parse(toolCall.function.arguments);
       process.stdout.write(`  [Tool: ${toolCall.function.name}]\n`);
-      return await tool.execute(args);
+      return await this.toolRegistry.execute(
+        toolCall.function.name,
+        toolCall.function.arguments,
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
       return `Error executing tool "${toolCall.function.name}": ${message}`;
     }
+  }
+
+  /**
+   * Trim old conversation messages when approaching the context window limit.
+   * Always keeps the system message and the most recent messages.
+   */
+  private snipHistory(messages: Message[]): void {
+    const totalTokens = estimateTotalTokens(messages);
+    // Leave room for the response (reserve ~4000 tokens)
+    const limit = this.contextBudget - 4000;
+    if (totalTokens <= limit) return;
+
+    // Find the system message (always index 0) — keep it
+    const systemMsg = messages[0]?.role === "system" ? messages.shift()! : null;
+
+    // Drop oldest non-system messages until under budget
+    while (messages.length > 2 && estimateTotalTokens(messages) > limit * 0.8) {
+      messages.shift();
+    }
+
+    // Re-insert system message at the front
+    if (systemMsg) {
+      messages.unshift(systemMsg);
+    }
+  }
+
+  /** Truncate a tool result if it exceeds the per-result token budget. */
+  private applyToolResultBudget(result: string): string {
+    return truncateToTokenBudget(result, this.toolResultBudget);
   }
 
   /** Stream the final response after all tool calls are resolved. */
