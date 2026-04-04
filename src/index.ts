@@ -26,6 +26,7 @@ import { MessageTool } from "./tools/message.js";
 import { AgentRunner } from "./core/agent.js";
 import { ContextBuilder } from "./core/context.js";
 import { Memory } from "./core/memory.js";
+import { SkillsLoader } from "./core/skills.js";
 import { SessionManager } from "./session/manager.js";
 import { MessageBus } from "./bus/queue.js";
 import { AgentLoop } from "./core/loop.js";
@@ -71,7 +72,9 @@ async function main() {
   // Core systems
   const memory = new Memory();
   const sessionManager = new SessionManager();
-  const context = new ContextBuilder(config.persona, toolRegistry, memory);
+  const skills = new SkillsLoader();
+  console.log(`Skills: ${skills.getAll().map((s) => s.name).join(", ") || "(none)"}`);
+  const context = new ContextBuilder(config.persona, toolRegistry, memory, skills);
   const agent = new AgentRunner(provider, toolRegistry, config.agent.maxIterations);
 
   // Default logging hook — shows the agent loop lifecycle in the console

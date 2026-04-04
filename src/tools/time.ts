@@ -19,7 +19,7 @@ export class TimeTool implements Tool {
   readOnly = true;
   concurrencySafe = true;
 
-  description = "Get the current date and time. Optionally specify a timezone (e.g., 'America/New_York', 'Asia/Shanghai', 'Europe/London').";
+  description = "Get the current date and time. Defaults to the system's local timezone. Optionally specify a timezone (e.g., 'America/New_York'). One call is enough — do not call again for the same timezone.";
 
   parameters: ToolParameters = {
     type: "object",

@@ -18,6 +18,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ToolRegistry } from "../tools/base.js";
 import { Memory } from "./memory.js";
+import { SkillsLoader } from "./skills.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TEMPLATES_DIR = path.resolve(__dirname, "../templates");
@@ -36,13 +37,14 @@ export class ContextBuilder {
   private customPersona: string | null;
   private toolRegistry: ToolRegistry;
   private memory: Memory;
+  private skills: SkillsLoader;
 
-  constructor(persona: string | null, toolRegistry: ToolRegistry, memory: Memory) {
-    // If the persona is the old default, treat it as null (use templates instead)
+  constructor(persona: string | null, toolRegistry: ToolRegistry, memory: Memory, skills?: SkillsLoader) {
     const isDefault = persona?.startsWith("You are NanoBot, a helpful personal assistant");
     this.customPersona = isDefault ? null : persona;
     this.toolRegistry = toolRegistry;
     this.memory = memory;
+    this.skills = skills ?? new SkillsLoader();
   }
 
   setPersona(persona: string): void {
@@ -76,14 +78,22 @@ export class ContextBuilder {
     const user = readTemplate("USER.md");
     if (user) parts.push(user);
 
-    // 5. Long-term memory (dynamic)
+    // 5. Always-on skills (full content injected)
+    const alwaysOnSection = this.skills.buildAlwaysOnSection();
+    if (alwaysOnSection) parts.push(alwaysOnSection);
+
+    // 6. On-demand skills (summary only — agent reads full content via read_file)
+    const summarySection = this.skills.buildSummarySection();
+    if (summarySection) parts.push(summarySection);
+
+    // 7. Long-term memory (dynamic)
     const memoryContent = this.memory.readLongTermMemory();
     if (memoryContent) {
       parts.push("## What you remember about the user:");
       parts.push(memoryContent);
     }
 
-    // 6. Current time
+    // 8. Current time
     const now = new Date();
     parts.push(`\nCurrent date and time: ${now.toLocaleString("en-US", {
       weekday: "long",
@@ -95,7 +105,7 @@ export class ContextBuilder {
       timeZoneName: "short",
     })}`);
 
-    // 7. Available tools
+    // 9. Available tools
     const toolNames = this.toolRegistry.getToolNames();
     if (toolNames.length > 0) {
       parts.push(`\nAvailable tools: ${toolNames.join(", ")}`);
