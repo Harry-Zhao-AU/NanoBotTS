@@ -28,7 +28,7 @@
 import { LLMProvider } from "../providers/base.js";
 import { ToolRegistry } from "../tools/base.js";
 import { Message, ToolCall, AssistantMessage, ToolResultMessage } from "../types.js";
-import { estimateTotalTokens, truncateToTokenBudget } from "../utils/tokens.js";
+import { estimateMessageTokens, estimateTotalTokens, truncateToTokenBudget } from "../utils/tokens.js";
 
 /** Callback for streaming chunks to the caller */
 export type StreamCallback = (chunk: string) => void;
@@ -86,19 +86,29 @@ export class AgentRunner {
           content: response.content,
           tool_calls: response.toolCalls,
         };
-        messages.push(assistantMsg as unknown as Message);
+        messages.push(assistantMsg as Message);
 
-        // Execute each tool and add results to history
-        for (const toolCall of response.toolCalls) {
+        // Execute tools — run concurrency-safe tools in parallel
+        const { concurrent, sequential } = this.partitionToolCalls(response.toolCalls);
+
+        // Run concurrency-safe tools in parallel
+        if (concurrent.length > 0) {
+          const results = await Promise.all(
+            concurrent.map(async (tc) => ({
+              id: tc.id,
+              result: this.applyToolResultBudget(await this.executeTool(tc)),
+            })),
+          );
+          for (const { id, result } of results) {
+            messages.push({ role: "tool", content: result, tool_call_id: id } as Message);
+          }
+        }
+
+        // Run non-concurrent tools sequentially
+        for (const toolCall of sequential) {
           let result = await this.executeTool(toolCall);
           result = this.applyToolResultBudget(result);
-
-          const toolResultMsg: ToolResultMessage = {
-            role: "tool",
-            content: result,
-            tool_call_id: toolCall.id,
-          };
-          messages.push(toolResultMsg as unknown as Message);
+          messages.push({ role: "tool", content: result, tool_call_id: toolCall.id } as Message);
         }
 
         // Continue the loop — send tool results back to the LLM
@@ -106,11 +116,10 @@ export class AgentRunner {
       }
 
       // Case 2: LLM gave a final text response (no tool calls)
-      // Stream it if a callback was provided
       if (onStream && response.content) {
-        // For the final response, re-call with streaming
-        const streamedContent = await this.streamFinalResponse(messages, onStream);
-        return streamedContent;
+        // Feed the already-received content to the stream callback
+        // instead of making a second LLM call
+        onStream(response.content);
       }
 
       return response.content ?? "";
@@ -142,24 +151,42 @@ export class AgentRunner {
   }
 
   /**
+   * Partition tool calls into concurrent (safe to parallelize) and sequential groups.
+   */
+  private partitionToolCalls(toolCalls: ToolCall[]): { concurrent: ToolCall[]; sequential: ToolCall[] } {
+    const concurrent: ToolCall[] = [];
+    const sequential: ToolCall[] = [];
+
+    for (const tc of toolCalls) {
+      const tool = this.toolRegistry.get(tc.function.name);
+      if (tool?.concurrencySafe) {
+        concurrent.push(tc);
+      } else {
+        sequential.push(tc);
+      }
+    }
+
+    return { concurrent, sequential };
+  }
+
+  /**
    * Trim old conversation messages when approaching the context window limit.
    * Always keeps the system message and the most recent messages.
    */
   private snipHistory(messages: Message[]): void {
-    const totalTokens = estimateTotalTokens(messages);
-    // Leave room for the response (reserve ~4000 tokens)
+    let currentTokens = estimateTotalTokens(messages);
     const limit = this.contextBudget - 4000;
-    if (totalTokens <= limit) return;
+    if (currentTokens <= limit) return;
 
-    // Find the system message (always index 0) — keep it
     const systemMsg = messages[0]?.role === "system" ? messages.shift()! : null;
+    const target = limit * 0.8;
 
-    // Drop oldest non-system messages until under budget
-    while (messages.length > 2 && estimateTotalTokens(messages) > limit * 0.8) {
-      messages.shift();
+    // Subtract incrementally instead of re-scanning the whole array
+    while (messages.length > 2 && currentTokens > target) {
+      const removed = messages.shift()!;
+      currentTokens -= estimateMessageTokens(removed);
     }
 
-    // Re-insert system message at the front
     if (systemMsg) {
       messages.unshift(systemMsg);
     }
@@ -170,16 +197,4 @@ export class AgentRunner {
     return truncateToTokenBudget(result, this.toolResultBudget);
   }
 
-  /** Stream the final response after all tool calls are resolved. */
-  private async streamFinalResponse(
-    messages: Message[],
-    onStream: StreamCallback,
-  ): Promise<string> {
-    let fullContent = "";
-    for await (const chunk of this.provider.chatStream(messages)) {
-      onStream(chunk);
-      fullContent += chunk;
-    }
-    return fullContent;
-  }
 }

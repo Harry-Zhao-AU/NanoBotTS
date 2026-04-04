@@ -16,6 +16,7 @@
  */
 
 import { Tool, ToolParameters } from "./base.js";
+import { htmlToText, DEFAULT_USER_AGENT } from "../utils/html.js";
 
 export class WebSearchTool implements Tool {
   name = "web_search";
@@ -48,7 +49,7 @@ export class WebSearchTool implements Tool {
       const response = await fetch(url, {
         headers: {
           // DuckDuckGo requires a browser-like User-Agent
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          "User-Agent": DEFAULT_USER_AGENT,
         },
       });
 
@@ -94,13 +95,13 @@ export class WebSearchTool implements Tool {
     while ((match = linkRegex.exec(html)) !== null) {
       links.push({
         url: this.decodeUrl(match[1]),
-        title: this.stripHtml(match[2]),
+        title: htmlToText(match[2]),
       });
     }
 
     const snippets: string[] = [];
     while ((match = snippetRegex.exec(html)) !== null) {
-      snippets.push(this.stripHtml(match[1]));
+      snippets.push(htmlToText(match[1]));
     }
 
     for (let i = 0; i < links.length; i++) {
@@ -112,20 +113,6 @@ export class WebSearchTool implements Tool {
     }
 
     return results;
-  }
-
-  /** Strip HTML tags and decode entities */
-  private stripHtml(html: string): string {
-    return html
-      .replace(/<[^>]*>/g, "")
-      .replace(/&amp;/g, "&")
-      .replace(/&lt;/g, "<")
-      .replace(/&gt;/g, ">")
-      .replace(/&quot;/g, '"')
-      .replace(/&#x27;/g, "'")
-      .replace(/&nbsp;/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
   }
 
   /** DuckDuckGo wraps URLs in a redirect — extract the real URL */

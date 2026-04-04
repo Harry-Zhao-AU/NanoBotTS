@@ -22,7 +22,7 @@ const SESSIONS_DIR = path.join(DATA_DIR, "sessions");
 /** Metadata stored alongside each session */
 interface SessionMeta {
   session: Session;
-  /** Index into the message array — messages before this have been consolidated */
+  /** Count of user+assistant messages that have been consolidated */
   lastConsolidated: number;
 }
 
@@ -50,9 +50,11 @@ export class SessionManager {
     const saved = this.loadFromDisk(sessionKey);
     if (saved.length > 0) {
       for (const msg of saved) {
-        session.addMessage(msg.role, msg.content);
+        session.addMessage(msg.role, msg.content ?? "");
       }
-      lastConsolidated = saved.filter((m) => m.role === "user").length;
+      // Don't mark all messages as consolidated — we don't know which
+      // were already archived. Start from 0 so the next threshold triggers.
+      lastConsolidated = 0;
     } else if (systemPrompt) {
       session.addMessage("system", systemPrompt);
     }
@@ -86,6 +88,15 @@ export class SessionManager {
     }
   }
 
+  /** Get only user+assistant messages from a session (excludes system/tool). */
+  private getConversationMessages(sessionKey: string): Message[] {
+    const meta = this.sessions.get(sessionKey);
+    if (!meta) return [];
+    return meta.session.getMessages().filter(
+      (m) => m.role === "user" || m.role === "assistant",
+    );
+  }
+
   /**
    * Get messages that haven't been consolidated yet.
    * Returns only user/assistant messages added since the last consolidation.
@@ -93,37 +104,27 @@ export class SessionManager {
   getUnconsolidatedMessages(sessionKey: string): Message[] {
     const meta = this.sessions.get(sessionKey);
     if (!meta) return [];
-
-    const allMessages = meta.session.getMessages();
-    const userMessages = allMessages.filter(
-      (m) => m.role === "user" || m.role === "assistant",
-    );
-
-    return userMessages.slice(meta.lastConsolidated);
+    return this.getConversationMessages(sessionKey).slice(meta.lastConsolidated);
   }
 
   /** Mark current messages as consolidated (update the offset). */
   markConsolidated(sessionKey: string): void {
     const meta = this.sessions.get(sessionKey);
     if (!meta) return;
-
-    const userMsgCount = meta.session
-      .getMessages()
-      .filter((m) => m.role === "user").length;
-    meta.lastConsolidated = userMsgCount;
+    meta.lastConsolidated = this.getConversationMessages(sessionKey).length;
   }
 
-  /** Check if there are enough new messages to warrant consolidation. */
+  /**
+   * Check if there are enough new messages to warrant consolidation.
+   * Counts user messages only for the threshold (every N user turns).
+   */
   shouldConsolidate(sessionKey: string, threshold: number = 5): boolean {
     const meta = this.sessions.get(sessionKey);
     if (!meta) return false;
 
-    const totalUserMsgs = meta.session
-      .getMessages()
-      .filter((m) => m.role === "user").length;
-
-    const unconsolidated = totalUserMsgs - meta.lastConsolidated;
-    return unconsolidated >= threshold;
+    const unconsolidated = this.getUnconsolidatedMessages(sessionKey);
+    const unconsolidatedUserMsgs = unconsolidated.filter((m) => m.role === "user").length;
+    return unconsolidatedUserMsgs >= threshold;
   }
 
   /** Clear a session (in memory and on disk). */

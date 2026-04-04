@@ -19,6 +19,10 @@ import { createDefaultRegistry } from "./providers/registry.js";
 import { ToolRegistry } from "./tools/base.js";
 import { TimeTool } from "./tools/time.js";
 import { WebSearchTool } from "./tools/web-search.js";
+import { WebFetchTool } from "./tools/web-fetch.js";
+import { ReadFileTool, WriteFileTool, EditFileTool, ListDirTool } from "./tools/filesystem.js";
+import { ExecTool } from "./tools/shell.js";
+import { MessageTool } from "./tools/message.js";
 import { AgentRunner } from "./core/agent.js";
 import { ContextBuilder } from "./core/context.js";
 import { Memory } from "./core/memory.js";
@@ -48,10 +52,20 @@ async function main() {
   });
   console.log(`Provider: ${config.provider.name} (${config.provider.model})`);
 
+  // Bus — the backbone connecting channels <-> agent
+  const bus = new MessageBus();
+
   // Tools
   const toolRegistry = new ToolRegistry();
   toolRegistry.register(new TimeTool());
   toolRegistry.register(new WebSearchTool());
+  toolRegistry.register(new WebFetchTool());
+  toolRegistry.register(new ReadFileTool());
+  toolRegistry.register(new WriteFileTool());
+  toolRegistry.register(new EditFileTool());
+  toolRegistry.register(new ListDirTool());
+  toolRegistry.register(new ExecTool());
+  toolRegistry.register(new MessageTool(bus));
   console.log(`Tools: ${toolRegistry.getToolNames().join(", ")}`);
 
   // Core systems
@@ -59,9 +73,6 @@ async function main() {
   const sessionManager = new SessionManager();
   const context = new ContextBuilder(config.persona, toolRegistry, memory);
   const agent = new AgentRunner(provider, toolRegistry, config.agent.maxIterations);
-
-  // Bus — the backbone connecting channels <-> agent
-  const bus = new MessageBus();
 
   // AgentLoop — central orchestrator
   const agentLoop = new AgentLoop(bus, agent, context, memory, sessionManager);

@@ -8,11 +8,17 @@
 /** The role of a message in a conversation */
 export type MessageRole = "system" | "user" | "assistant" | "tool";
 
-/** A single message in a conversation */
-export interface Message {
+/** A basic message in a conversation */
+export interface BaseMessage {
   role: MessageRole;
   content: string;
 }
+
+/**
+ * Union type for all message types that can appear in conversation history.
+ * Includes basic messages, assistant messages with tool_calls, and tool results.
+ */
+export type Message = BaseMessage | AssistantMessage | ToolResultMessage;
 
 /**
  * A tool call requested by the LLM.

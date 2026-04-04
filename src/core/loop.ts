@@ -173,7 +173,7 @@ export class AgentLoop {
     session.addMessage("system", this.context.build());
     for (const msg of messages) {
       if (msg.role !== "system") {
-        session.addMessage(msg.role, msg.content);
+        session.addMessage(msg.role, msg.content ?? "");
       }
     }
   }
