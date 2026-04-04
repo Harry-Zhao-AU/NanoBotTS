@@ -1,11 +1,16 @@
 /**
- * Azure OpenAI LLM Provider.
+ * OpenAI-Compatible LLM Provider.
  *
- * Wraps the OpenAI SDK's AzureOpenAI client. Now extends the abstract
- * LLMProvider base class so it's swappable with other providers.
+ * Works with any API that implements the OpenAI chat completions format:
+ *   - OpenAI (api.openai.com)
+ *   - Groq, Together, Fireworks, DeepSeek
+ *   - Local servers: Ollama, LM Studio, vLLM, etc.
+ *
+ * Set `endpoint` to the base URL and `apiKey` + `model` as needed.
+ * For local servers that don't require auth, use apiKey: "not-needed".
  */
 
-import { AzureOpenAI } from "openai";
+import OpenAI from "openai";
 import type {
   ChatCompletionMessageParam,
   ChatCompletionTool,
@@ -13,20 +18,16 @@ import type {
 import { LLMProvider, ProviderConfig, GenerationSettings } from "./base.js";
 import { LLMResponse, Message } from "../types.js";
 
-export class AzureOpenAIProvider extends LLMProvider {
-  private client: AzureOpenAI;
+export class OpenAICompatProvider extends LLMProvider {
+  private client: OpenAI;
   private model: string;
 
   constructor(config: ProviderConfig, settings: GenerationSettings) {
     super(settings);
 
-    const apiVersion = config.extras?.apiVersion ?? "2024-10-21";
-
-    this.client = new AzureOpenAI({
-      endpoint: config.endpoint,
+    this.client = new OpenAI({
+      baseURL: config.endpoint || "https://api.openai.com/v1",
       apiKey: config.apiKey,
-      apiVersion,
-      deployment: config.model,
     });
     this.model = config.model;
   }

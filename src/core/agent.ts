@@ -25,7 +25,7 @@
  *   tool results → assistant (final text).
  */
 
-import { AzureOpenAIProvider } from "../providers/azure-openai.js";
+import { LLMProvider } from "../providers/base.js";
 import { ToolRegistry } from "../tools/base.js";
 import { Message, ToolCall, AssistantMessage, ToolResultMessage } from "../types.js";
 import { estimateTotalTokens, truncateToTokenBudget } from "../utils/tokens.js";
@@ -34,7 +34,7 @@ import { estimateTotalTokens, truncateToTokenBudget } from "../utils/tokens.js";
 export type StreamCallback = (chunk: string) => void;
 
 export class AgentRunner {
-  private provider: AzureOpenAIProvider;
+  private provider: LLMProvider;
   private toolRegistry: ToolRegistry;
   private maxIterations: number;
   /** Max tokens for the full context window (prompt + response) */
@@ -43,7 +43,7 @@ export class AgentRunner {
   private toolResultBudget: number;
 
   constructor(
-    provider: AzureOpenAIProvider,
+    provider: LLMProvider,
     toolRegistry: ToolRegistry,
     maxIterations: number = 200,
     contextBudget: number = 120000,

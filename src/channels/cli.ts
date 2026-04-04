@@ -56,7 +56,7 @@ export class CLIChannel implements Channel {
   }
 
   async start(): Promise<void> {
-    console.log("NanoBot v0.8 — MessageBus Architecture");
+    console.log("NanoBot v0.9 — Multi-Provider");
     console.log('Type a message, or /help for commands. "exit" to quit.\n');
 
     // Ensure session exists (SessionManager loads from disk automatically)
@@ -242,9 +242,9 @@ Available commands:
     console.log(`
 Current configuration:
   Persona:      ${this.context.getPersona().slice(0, 80)}${this.context.getPersona().length > 80 ? "..." : ""}
-  Endpoint:     ${this.config.provider.endpoint}
-  Deployment:   ${this.config.provider.deploymentName}
-  API Version:  ${this.config.provider.apiVersion}
+  Provider:     ${this.config.provider.name}
+  Endpoint:     ${this.config.provider.endpoint || "(default)"}
+  Model:        ${this.config.provider.model}
   Temperature:  ${this.config.agent.temperature}
   Max Tokens:   ${this.config.agent.maxTokens}
   Max Iters:    ${this.config.agent.maxIterations}
@@ -256,11 +256,11 @@ Current configuration:
 
   private setModel(name: string): void {
     if (!name) {
-      console.log(`\nCurrent model: ${this.config.provider.deploymentName}`);
+      console.log(`\nCurrent model: ${this.config.provider.model}`);
       console.log('Usage: /model <deployment-name>\n');
       return;
     }
-    this.config.provider.deploymentName = name;
+    this.config.provider.model = name;
     saveConfig(this.config);
     console.log(`\nModel set to "${name}" and saved. Restart to apply.\n`);
   }

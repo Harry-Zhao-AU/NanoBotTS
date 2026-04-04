@@ -1,21 +1,21 @@
 /**
  * NanoBotTS — Entry Point
  *
- * Phase 2: MessageBus architecture.
- *
- * Components are wired together:
- *   MessageBus ← channels publish inbound, AgentLoop publishes outbound
- *   AgentLoop  ← consumes inbound, runs agent, publishes outbound
- *   ChannelManager ← consumes outbound, routes to correct channel
+ * Phase 3: Multi-provider support via ProviderRegistry.
  *
  * Usage:
  *   npm start                         — CLI mode (default)
  *   npm start -- --channel telegram   — Telegram mode
  *   npm start -- --channel all        — Both CLI and Telegram
+ *
+ * Provider selection (via .env):
+ *   PROVIDER_NAME=azure-openai   (default, uses AZURE_OPENAI_* vars)
+ *   PROVIDER_NAME=openai         (uses OPENAI_API_KEY, OPENAI_MODEL)
+ *   PROVIDER_NAME=ollama         (local, uses OPENAI_BASE_URL)
  */
 
 import { loadConfig } from "./config.js";
-import { AzureOpenAIProvider } from "./providers/azure-openai.js";
+import { createDefaultRegistry } from "./providers/registry.js";
 import { ToolRegistry } from "./tools/base.js";
 import { TimeTool } from "./tools/time.js";
 import { WebSearchTool } from "./tools/web-search.js";
@@ -40,12 +40,13 @@ function parseChannelArg(): string {
 async function main() {
   const config = loadConfig();
 
-  // Provider
-  const provider = new AzureOpenAIProvider(
-    config.provider,
-    config.agent.temperature,
-    config.agent.maxTokens,
-  );
+  // Provider — created via registry from config
+  const providerRegistry = createDefaultRegistry();
+  const provider = await providerRegistry.create(config.provider, {
+    temperature: config.agent.temperature,
+    maxTokens: config.agent.maxTokens,
+  });
+  console.log(`Provider: ${config.provider.name} (${config.provider.model})`);
 
   // Tools
   const toolRegistry = new ToolRegistry();
@@ -59,7 +60,7 @@ async function main() {
   const context = new ContextBuilder(config.persona, toolRegistry, memory);
   const agent = new AgentRunner(provider, toolRegistry, config.agent.maxIterations);
 
-  // Bus — the backbone connecting channels ↔ agent
+  // Bus — the backbone connecting channels <-> agent
   const bus = new MessageBus();
 
   // AgentLoop — central orchestrator
@@ -95,10 +96,7 @@ async function main() {
   }
 
   // Start everything
-  // AgentLoop runs in background (non-blocking infinite loop)
   agentLoop.start();
-
-  // ChannelManager starts channels + outbound dispatch loop
   await channelManager.startAll();
 
   // Graceful shutdown

@@ -55,14 +55,34 @@ export interface LLMResponse {
   content: string | null;
   toolCalls: ToolCall[];
   finishReason: string;
+  /** Token usage stats (if reported by the provider) */
+  usage?: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  };
 }
 
-/** Azure OpenAI connection configuration */
+/** Azure OpenAI connection configuration (kept for backwards compat with old config.json) */
 export interface AzureOpenAIConfig {
   endpoint: string;
   apiKey: string;
   deploymentName: string;
   apiVersion: string;
+}
+
+/** Generic provider configuration */
+export interface ProviderConfigType {
+  /** Provider name: "azure-openai", "openai", "groq", "ollama", etc. */
+  name: string;
+  /** API endpoint URL (optional — providers have defaults) */
+  endpoint?: string;
+  /** API key (loaded from .env) */
+  apiKey: string;
+  /** Model or deployment name */
+  model: string;
+  /** Provider-specific extra settings (e.g., apiVersion for Azure) */
+  extras?: Record<string, string>;
 }
 
 /** Channel configuration */
@@ -75,8 +95,8 @@ export interface ChannelsConfig {
 export interface AppConfig {
   /** The system prompt / persona for the bot */
   persona: string;
-  /** Azure OpenAI provider settings */
-  provider: AzureOpenAIConfig;
+  /** LLM provider settings */
+  provider: ProviderConfigType;
   /** Agent behavior settings */
   agent: {
     maxIterations: number;
