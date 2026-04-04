@@ -74,6 +74,22 @@ async function main() {
   const context = new ContextBuilder(config.persona, toolRegistry, memory);
   const agent = new AgentRunner(provider, toolRegistry, config.agent.maxIterations);
 
+  // Default logging hook — shows the agent loop lifecycle in the console
+  agent.addHook({
+    async beforeIteration(i) {
+      if (i > 0) console.log(`  [Loop] Iteration ${i}`);
+    },
+    async beforeExecuteTools(toolCalls) {
+      const names = toolCalls.map((t) => t.function.name).join(", ");
+      console.log(`  [Tools] ${names}`);
+    },
+    async afterIteration(i, response) {
+      if (response.usage) {
+        console.log(`  [Tokens] ${response.usage.totalTokens} total`);
+      }
+    },
+  });
+
   // AgentLoop — central orchestrator
   const agentLoop = new AgentLoop(bus, agent, context, memory, sessionManager);
 

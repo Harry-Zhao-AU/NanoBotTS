@@ -56,7 +56,7 @@ export class CLIChannel implements Channel {
   }
 
   async start(): Promise<void> {
-    console.log("NanoBot v1.0 — Full Tool Suite");
+    console.log("NanoBot v1.1 — Hooks + Templates");
     console.log('Type a message, or /help for commands. "exit" to quit.\n');
 
     // Ensure session exists (SessionManager loads from disk automatically)
