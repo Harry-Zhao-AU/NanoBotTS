@@ -4,3 +4,4 @@ dist/
 data/
 debug.log
 .claude/settings.local.json
+.vscode/
