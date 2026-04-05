@@ -2,168 +2,163 @@
 
 ## Current State vs Goal — Gap Analysis
 
-| Area | Current (flow.md) | Goal (flowGoal.md) | Gap |
-|------|-------------------|---------------------|-----|
-| **Channels** | CLI + Telegram (direct coupling) | 13+ channels via MessageBus | Missing bus, 11+ channels |
-| **Message routing** | Channels call agent directly | MessageBus with async inbound/outbound queues | No bus layer |
-| **Orchestrator** | None — channels own the loop | AgentLoop with per-session locks, semaphore | Missing entirely |
-| **Agent iterations** | Max 10 | Max 200 | Config change + context mgmt |
-| **Provider** | AzureOpenAI only | ProviderRegistry with 20+ (OpenAI-compat, Anthropic, Azure) | Single provider, no registry |
-| **Tools** | 2 (time, web_search) | 10+ (filesystem, shell, web, message, cron, spawn, MCP) | Missing 8+ tools |
-| **Tool Registry** | Basic registry | Formal ToolRegistry with validation, casting, concurrent exec | Needs hardening |
-| **MCP** | None | MCPToolWrapper dynamically wrapping external MCP servers | Missing entirely |
-| **Memory** | memory.md + session JSONL | MEMORY.md + HISTORY.md + token-aware consolidation | Missing HISTORY.md, token mgmt |
-| **Session** | In-memory Session class | SessionManager with JSONL, consolidated offset tracking | Needs upgrade |
-| **Context** | persona + memory + time + tools | identity + templates (SOUL/AGENTS/TOOLS/USER.md) + memory + skills | Missing templates, skills |
-| **Skills** | None | SkillsLoader with progressive loading, SKILL.md files | Missing entirely |
-| **Hooks** | None | AgentHook + CompositeHook lifecycle callbacks | Missing entirely |
-| **Background** | None | SubagentManager, CronService, HeartbeatService | Missing entirely |
-| **Security** | None | SSRF protection, URL validation, workspace restriction | Missing entirely |
-| **SDK/API** | None | Nanobot SDK class + OpenAI-compatible HTTP server | Missing entirely |
-| **Streaming** | Basic per-channel | Through bus with delta coalescing | Needs bus integration |
+| Area | Current (flow.md) | Goal (flowGoal.md) | Status |
+|------|-------------------|---------------------|--------|
+| **Channels** | CLI + Telegram via MessageBus | 13+ channels via MessageBus | Phase 2 done, Phase 10 pending |
+| **Message routing** | MessageBus with async queues | MessageBus with async inbound/outbound queues | Done |
+| **Orchestrator** | AgentLoop with per-session locks | AgentLoop with per-session locks, semaphore | Done |
+| **Agent iterations** | Max 200, configurable | Max 200 | Done |
+| **Provider** | ProviderRegistry (Azure, OpenAI-compat) | ProviderRegistry with 20+ | Phase 3 done, more providers later |
+| **Tools** | 13 tools | 10+ (filesystem, shell, web, message, cron, spawn, MCP) | Phase 4 done, MCP pending |
+| **Tool Registry** | Formal with validation, casting, concurrent exec | Formal ToolRegistry | Done |
+| **MCP** | None | MCPToolWrapper dynamically wrapping external MCP servers | Phase 8 pending |
+| **Memory** | MEMORY.md + HISTORY.md + token-aware consolidation | MEMORY.md + HISTORY.md + token-aware consolidation | Done |
+| **Session** | SessionManager with JSONL, consolidated offset | SessionManager with JSONL, consolidated offset tracking | Done |
+| **Context** | Templates (SOUL/AGENTS/TOOLS/USER.md) + memory + skills | identity + templates + memory + skills | Done |
+| **Skills** | SkillsLoader with always/on-demand + load_skill tool | SkillsLoader with progressive loading | Done |
+| **Hooks** | AgentHook + CompositeHook | AgentHook + CompositeHook lifecycle callbacks | Done |
+| **Background** | CronService + SubagentManager + HeartbeatService (2-phase) | SubagentManager, CronService, HeartbeatService | Done |
+| **Security** | Shell deny-list only | SSRF protection, URL validation, workspace restriction | Phase 9 pending |
+| **SDK/API** | None | Nanobot SDK class + OpenAI-compatible HTTP server + gateway | Phase 11 pending |
+| **Streaming** | Through bus with delta coalescing | Through bus with delta coalescing | Done |
 
 ---
 
 ## Phased Implementation Plan
 
-### Phase 1: Foundation Hardening
+### Phase 1: Foundation Hardening — DONE
 
-**Goal:** Strengthen existing core to support future layers.
+- [x] **1.1 Formal ToolRegistry** — validate(), castParams(), prepareCall(), readOnly/concurrencySafe flags
+- [x] **1.2 Increase max iterations** — 200, configurable
+- [x] **1.3 Context window management** — snipHistory(), applyToolResultBudget(), token estimation
+- [x] **1.4 SessionManager upgrade** — dedicated class, lastConsolidated offset
+- [x] **1.5 HISTORY.md** — searchable chronological log
 
-- [ ] **1.1 Formal ToolRegistry** — Add `validate()`, `castParams()`, `prepareCall()` to `tools/base.ts`. Support `readOnly`, `concurrencySafe` flags per tool.
-- [ ] **1.2 Increase max iterations** — Change AgentRunner from 10 to 200. Add configurable `maxIterations` to config.
-- [ ] **1.3 Context window management** — Add `snipHistory()` to trim old messages when approaching token limit. Add `applyToolResultBudget()` to truncate large tool outputs. Add token estimation utility.
-- [ ] **1.4 SessionManager upgrade** — Extract session persistence logic from channels into a dedicated `SessionManager` class. Track `lastConsolidated` offset for memory archival.
-- [ ] **1.5 HISTORY.md** — Add searchable chronological log alongside MEMORY.md. Append raw message summaries on each consolidation.
+### Phase 2: MessageBus + AgentLoop — DONE
 
-### Phase 2: MessageBus + AgentLoop
+- [x] **2.1 MessageBus** — async inbound/outbound queues
+- [x] **2.2 AgentLoop** — central orchestrator with per-session locks, semaphore
+- [x] **2.3 Refactor channels** — thin I/O adapters publishing to bus
+- [x] **2.4 ChannelManager** — channel discovery, outbound dispatch
+- [x] **2.5 Update index.ts** — full wiring
 
-**Goal:** Decouple channels from agent via async message routing.
+### Phase 3: Provider Registry + Multi-Provider — DONE
 
-- [ ] **2.1 MessageBus** — Create `bus/queue.ts` with `InboundMessage` and `OutboundMessage` types. Two async queues (inbound, outbound).
-- [ ] **2.2 AgentLoop** — Create `core/loop.ts` as central orchestrator. Consumes from inbound queue, dispatches per-session with concurrency control (per-session lock + global semaphore). Publishes results to outbound queue.
-- [ ] **2.3 Refactor channels** — Channels no longer call AgentRunner directly. Instead: receive message -> publish to bus inbound. Subscribe to bus outbound -> send to user.
-- [ ] **2.4 ChannelManager** — Create `channels/manager.ts` for channel discovery, starting/stopping, and outbound dispatch with delta coalescing for streaming.
-- [ ] **2.5 Update index.ts** — Wire MessageBus, AgentLoop, ChannelManager together. Channels become thin I/O adapters.
+- [x] **3.1 LLMProvider interface** — abstract base with retry
+- [x] **3.2 ProviderRegistry** — keyword-based auto-matching
+- [x] **3.3 Refactor AzureOpenAIProvider** — extends LLMProvider
+- [x] **3.4 OpenAICompatProvider** — generic OpenAI-compatible
+- [ ] **3.5 AnthropicProvider** — deferred (not needed until user wants Claude)
+- [x] **3.6 Config-driven provider selection** — auto-detect from env vars
 
-### Phase 3: Provider Registry + Multi-Provider
+### Phase 4: Expanded Tool Suite — DONE
 
-**Goal:** Support multiple LLM backends.
+- [x] **4.1 Filesystem tools** — read_file, write_file, edit_file, list_dir
+- [x] **4.2 Shell tool** — exec with deny-list and timeout
+- [x] **4.3 Web fetch tool** — web_fetch with HTML-to-text
+- [x] **4.4 Message tool** — sends to MessageBus outbound
+- [x] **4.5 Concurrent tool execution** — concurrencySafe tools run in parallel
 
-- [ ] **3.1 LLMProvider interface** — Create `providers/base.ts` with abstract `chat()`, `chatWithTools()`, `chatStream()`. Add `LLMResponse` type with `content`, `toolCalls`, `finishReason`, `usage`.
-- [ ] **3.2 ProviderRegistry** — Create `providers/registry.ts` with keyword-based auto-matching. Register providers by name.
-- [ ] **3.3 Refactor AzureOpenAIProvider** — Implement the new LLMProvider interface. Add retry with exponential backoff.
-- [ ] **3.4 OpenAICompatProvider** — Generic provider supporting any OpenAI-compatible API (OpenAI, Groq, Together, local LLMs, etc.).
-- [ ] **3.5 AnthropicProvider** — Native Claude API support with prompt caching.
-- [ ] **3.6 Config-driven provider selection** — Update config.json schema to support multiple providers. Select provider by name at startup or per-request.
+### Phase 5: Hook System + Templates — DONE
 
-### Phase 4: Expanded Tool Suite
+- [x] **5.1 AgentHook interface** — beforeIteration, onStream, onStreamEnd, beforeExecuteTools, afterIteration, finalizeContent
+- [x] **5.2 CompositeHook** — fan-out with error isolation
+- [x] **5.3 Template system** — SOUL.md, AGENTS.md, TOOLS.md, USER.md
+- [x] **5.4 Refactor ContextBuilder** — assembles from templates + memory + skills
 
-**Goal:** Add the tools that make the agent actually useful.
+### Phase 6: Skills System — DONE
 
-- [ ] **4.1 Filesystem tools** — `read_file` (with pagination, line numbers), `write_file` (auto-create dirs), `edit_file` (find-and-replace), `list_dir` (recursive).
-- [ ] **4.2 Shell tool** — `exec` for running shell commands. Add deny-list for dangerous commands. Timeout support.
-- [ ] **4.3 Web fetch tool** — `web_fetch` to download URL content and convert to markdown. Complement existing `web_search`.
-- [ ] **4.4 Message tool** — `message` to send text/media back to a chat channel via the MessageBus outbound queue.
-- [ ] **4.5 Concurrent tool execution** — When multiple tool calls arrive in one response, execute concurrency-safe tools in parallel.
+- [x] **6.1 SkillsLoader** — scans skills/ directories, parses frontmatter (name, description, always)
+- [x] **6.2 Built-in skills** — memory (always-on), github (always-on), weather (always-on), summarize (on-demand)
+- [x] **6.3 Progressive loading** — always-on injected, on-demand listed in summary + load_skill tool
+- [x] **6.4 Workspace skills** — ./skills/ overrides src/skills/ by name
 
-### Phase 5: Hook System + Templates
+### Phase 7: Background Services — DONE
 
-**Goal:** Enable lifecycle callbacks and template-driven system prompts.
+- [x] **7.1 CronService** — interval, cron-expression, one-time scheduling. Persists to JSON.
+- [x] **7.2 Cron tool** — add/list/remove scheduled jobs
+- [x] **7.3 SubagentManager** — background AgentRunner with limited tools (no message/spawn/cron)
+- [x] **7.4 Spawn tool** — launch background tasks, results via MessageBus
+- [x] **7.5 HeartbeatService** — 2-phase: LLM decides "run/skip" before executing
 
-- [ ] **5.1 AgentHook interface** — Create `core/hook.ts` with lifecycle methods: `beforeIteration`, `onStream`, `onStreamEnd`, `beforeExecuteTools`, `afterIteration`, `finalizeContent`.
-- [ ] **5.2 CompositeHook** — Fan-out to multiple hooks with error isolation per hook.
-- [ ] **5.3 Template system** — Create `templates/` directory with SOUL.md (persona/identity), AGENTS.md (agent behavior), TOOLS.md (tool usage guidance), USER.md (user-specific context).
-- [ ] **5.4 Refactor ContextBuilder** — Assemble system prompt from templates + memory + skills instead of a single persona string.
-
-### Phase 6: Skills System
-
-**Goal:** Progressive skill loading so the agent can learn new capabilities on demand.
-
-- [ ] **6.1 SkillsLoader** — Create `core/skills.ts`. Scan `skills/` directory for SKILL.md files. Parse frontmatter (name, description, alwaysOn, dependencies).
-- [ ] **6.2 Built-in skills** — Create SKILL.md files for: memory management, cron scheduling, github integration, weather, summarization.
-- [ ] **6.3 Progressive loading** — Always-on skills injected into every prompt. Other skills listed in summary; agent reads full content on demand via `read_file`.
-- [ ] **6.4 Workspace skills** — Support user-defined SKILL.md files in the working directory that override built-in skills.
-
-### Phase 7: Background Services
-
-**Goal:** Enable scheduled tasks, autonomous operation, and background work.
-
-- [ ] **7.1 CronService** — Create `cron/service.ts`. Support interval-based, cron-expression, and one-time scheduling. Persist jobs to JSON file. Timezone-aware.
-- [ ] **7.2 Cron tool** — `cron` tool for the agent to add/list/remove scheduled jobs.
-- [ ] **7.3 SubagentManager** — Create `core/subagent.ts`. Spawn background AgentRunner instances with limited tool access (no message, no spawn to prevent recursion).
-- [ ] **7.4 Spawn tool** — `spawn` tool for the agent to launch background tasks. Results announced via MessageBus.
-- [ ] **7.5 HeartbeatService** — Create `heartbeat/service.ts`. Periodically read HEARTBEAT.md, ask LLM if there are tasks to execute, optionally notify user.
-
-### Phase 8: MCP Integration
+### Phase 8: MCP Integration — PENDING
 
 **Goal:** Connect to external MCP servers and dynamically wrap their tools.
 
 - [ ] **8.1 MCP client** — Create `tools/mcp.ts`. Support stdio, SSE, and streamable HTTP transports.
-- [ ] **8.2 MCPToolWrapper** — Dynamically convert each MCP server tool into a nanobot Tool (name, description, parameters, execute).
-- [ ] **8.3 Config-driven MCP** — Add `mcp` section to config.json for defining MCP server connections. Lazy-load on first use.
-- [ ] **8.4 MCP tool namespacing** — Prefix tool names with server name to avoid collisions.
+- [ ] **8.2 MCPToolWrapper** — Dynamically convert each MCP server tool into a nanobot Tool (name, description, parameters, execute). Include JSON Schema normalization for OpenAI compatibility (handle oneOf, anyOf, nullable types).
+- [ ] **8.3 Config-driven MCP** — Add `tools.mcpServers` section to config.json. Per-server config: command/args (stdio), url/headers (HTTP), `enabledTools` filter (whitelist or `"*"`), `toolTimeout` (default 30s).
+- [ ] **8.4 MCP tool namespacing** — Prefix tool names with server name (e.g., `filesystem_read_file`) to avoid collisions across servers.
 
-### Phase 9: Security Layer
+*Gaps found vs original nanobot:*
+- *Added: `enabledTools` per-server whitelist filter*
+- *Added: `toolTimeout` per-server timeout config*
+- *Added: JSON Schema normalization (oneOf/anyOf → OpenAI-compat)*
+
+### Phase 9: Security Layer — PENDING (partially done)
 
 **Goal:** Protect against misuse and dangerous operations.
 
-- [ ] **9.1 SSRF protection** — Validate URLs in web tools against private IP ranges and internal hostnames.
-- [ ] **9.2 Workspace restriction** — Filesystem tools restricted to configured workspace directory.
-- [ ] **9.3 Shell deny-list** — Block dangerous shell commands (rm -rf /, format, etc.).
-- [ ] **9.4 Channel permissions** — Per-channel allowlists for users/groups. Permission check before processing.
+- [ ] **9.1 SSRF protection** — Validate URLs in web tools against private IP ranges (RFC1918, loopback, link-local, cloud metadata 169.254.x.x). DNS resolution before IP check. Post-redirect validation. Configurable whitelist for trusted CIDRs.
+- [x] **9.2 Shell deny-list** — Already implemented in `tools/shell.ts`. Block dangerous commands.
+- [ ] **9.3 Workspace restriction** — Filesystem tools restricted to configured workspace directory. Validate resolved paths stay within boundary.
+- [ ] **9.4 Channel permissions** — Per-channel allowlists for users/groups. Permission check in channel `_handle_message()` before publishing to bus.
+- [ ] **9.5 URL extraction scanning** — Scan shell commands for embedded URLs and validate them against SSRF rules before execution.
 
-### Phase 10: More Channels
+*Note: Original nanobot only implements SSRF (9.1). Items 9.2-9.5 are our additions — broader than original.*
 
-**Goal:** Expand beyond CLI + Telegram.
+### Phase 10: Channel Plugin Interface — PENDING
 
-- [ ] **10.1 Channel plugin interface** — Standardize BaseChannel with `start()`, `stop()`, `send()`, `sendDelta()`, `isAllowed()`.
-- [ ] **10.2 Discord channel** — Using discord.js.
-- [ ] **10.3 Slack channel** — Using Slack Bolt SDK.
-- [ ] **10.4 WhatsApp channel** — Via WhatsApp Business API or bridge.
-- [ ] **10.5 Email channel** — IMAP/SMTP-based.
-- [ ] **10.6 Channel discovery** — Auto-discover and register channels from a channels directory or plugin entry points.
+**Goal:** Standardize the channel interface so new channels can be added easily later.
 
-### Phase 11: SDK + API Layer
+- [ ] **10.1 Channel plugin interface** — Standardize BaseChannel with `start()`, `stop()`, `send()`, `sendDelta()`, `isAllowed()`. New channels (Discord, Slack, etc.) can be added anytime by implementing this interface — no dedicated phase needed.
+
+### Phase 11: SDK + API Layer — PENDING
 
 **Goal:** Expose NanoBotTS for programmatic use and as an API server.
 
-- [ ] **11.1 Nanobot SDK class** — Public facade: `Nanobot.fromConfig()`, `nanobot.run(message)`. Wraps AgentLoop for simple programmatic use.
-- [ ] **11.2 OpenAI-compatible API server** — HTTP server (`nanobot serve`) that exposes `/v1/chat/completions` compatible endpoint. Enables use as a drop-in replacement.
-- [ ] **11.3 CLI improvements** — Add commands: `nanobot onboard` (setup wizard), `nanobot agent` (interactive), `nanobot serve` (API server), `nanobot status`.
+- [ ] **11.1 Nanobot SDK class** — Public facade: `Nanobot.fromConfig()`, `nanobot.run(message, sessionKey, hooks)`. Returns `RunResult` with content, toolsUsed, messages. Wraps AgentLoop for simple programmatic use.
+- [ ] **11.2 OpenAI-compatible API server** — `nanobot serve --port 18790` exposes `/v1/chat/completions` endpoint. Enables use as a drop-in replacement for OpenAI API.
+- [ ] **11.3 Gateway command** — `nanobot gateway` runs the full orchestrator: MessageBus + all channels + CronService + HeartbeatService + API server. This is what docker-compose runs in production.
+- [ ] **11.4 CLI improvements** — Add commands: `nanobot onboard` (setup wizard), `nanobot agent` (interactive REPL), `nanobot serve` (API only), `nanobot gateway` (full server), `nanobot status` (health check).
+
+*Gaps found vs original nanobot:*
+- *Added: `gateway` command separate from `serve` (serve = HTTP API only, gateway = full orchestrator)*
+- *Added: `RunResult` return type for SDK with content, toolsUsed, messages*
+- *Added: hooks parameter on SDK `run()` for per-request lifecycle callbacks*
+
+### Phase 12: Docker + CI/CD — NEW
+
+**Goal:** Package for deployment and automate testing.
+
+- [ ] **12.1 Dockerfile** — Single-stage Node.js 22 build. Compile TypeScript, run with production deps.
+- [ ] **12.2 docker-compose.yml** — Two services: `nanobotts-gateway` (production, resource limits, restart: always) and `nanobotts-cli` (interactive dev).
+- [ ] **12.3 .dockerignore** — Exclude node_modules, dist, .env, data, .git, tests.
+- [ ] **12.4 GitHub Actions CI** — `.github/workflows/ci.yml`: run `tsc --noEmit` + `npm test` on push/PR to main.
+
+*See plan3.md for full details.*
 
 ---
 
 ## Priority Order
 
 ```
-Phase 1 (Foundation)  ━━━ must do first, everything depends on it
-Phase 2 (Bus + Loop)  ━━━ architectural unlock for everything else
-Phase 3 (Providers)   ━━━ high value, moderate effort
-Phase 4 (Tools)       ━━━ high value, makes agent useful
-Phase 5 (Hooks)       ━━━ enables extensibility
-Phase 6 (Skills)      ━━━ nice to have, builds on templates
-Phase 7 (Background)  ━━━ advanced, builds on bus + tools
-Phase 8 (MCP)         ━━━ advanced, builds on tool registry
-Phase 9 (Security)    ━━━ important before production use
-Phase 10 (Channels)   ━━━ scale, builds on bus
-Phase 11 (SDK/API)    ━━━ final polish, builds on everything
+Phase 1-7    ━━━ DONE
+Phase 8      ━━━ MCP integration (advanced, builds on tool registry)
+Phase 9      ━━━ Security (important before production use, partially done)
+Phase 10     ━━━ More channels (scale, builds on bus)
+Phase 11     ━━━ SDK/API + gateway (final architecture, builds on everything)
+Phase 12     ━━━ Docker + CI/CD (deployment, builds on Phase 11 gateway)
 ```
 
 ## Dependency Graph
 
 ```mermaid
 flowchart LR
-    P1["Phase 1\nFoundation"] --> P2["Phase 2\nBus + Loop"]
-    P2 --> P3["Phase 3\nProviders"]
-    P2 --> P4["Phase 4\nTools"]
-    P2 --> P5["Phase 5\nHooks + Templates"]
-    P5 --> P6["Phase 6\nSkills"]
-    P4 --> P7["Phase 7\nBackground Services"]
-    P2 --> P7
-    P4 --> P8["Phase 8\nMCP"]
-    P4 --> P9["Phase 9\nSecurity"]
-    P2 --> P10["Phase 10\nMore Channels"]
-    P2 --> P11["Phase 11\nSDK + API"]
-    P7 --> P11
+    P1["Phase 1-7\nDONE"] --> P8["Phase 8\nMCP"]
+    P1 --> P9["Phase 9\nSecurity"]
+    P1 --> P10["Phase 10\nMore Channels"]
+    P1 --> P11["Phase 11\nSDK + API + Gateway"]
+    P11 --> P12["Phase 12\nDocker + CI/CD"]
+    P9 --> P11
 ```
