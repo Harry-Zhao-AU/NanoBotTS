@@ -2,3 +2,5 @@ node_modules/
 dist/
 .env
 data/
+debug.log
+.claude/settings.local.json

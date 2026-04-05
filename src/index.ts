@@ -23,6 +23,9 @@ import { WebFetchTool } from "./tools/web-fetch.js";
 import { ReadFileTool, WriteFileTool, EditFileTool, ListDirTool } from "./tools/filesystem.js";
 import { ExecTool } from "./tools/shell.js";
 import { MessageTool } from "./tools/message.js";
+import { SkillLoaderTool } from "./tools/skill-loader.js";
+import { CronTool } from "./tools/cron.js";
+import { SpawnTool } from "./tools/spawn.js";
 import { AgentRunner } from "./core/agent.js";
 import { ContextBuilder } from "./core/context.js";
 import { Memory } from "./core/memory.js";
@@ -30,6 +33,9 @@ import { SkillsLoader } from "./core/skills.js";
 import { SessionManager } from "./session/manager.js";
 import { MessageBus } from "./bus/queue.js";
 import { AgentLoop } from "./core/loop.js";
+import { SubagentManager } from "./core/subagent.js";
+import { CronService } from "./cron/service.js";
+import { HeartbeatService } from "./heartbeat/service.js";
 import { ChannelManager } from "./channels/manager.js";
 import { CLIChannel } from "./channels/cli.js";
 import { TelegramChannel } from "./channels/telegram.js";
@@ -56,6 +62,16 @@ async function main() {
   // Bus — the backbone connecting channels <-> agent
   const bus = new MessageBus();
 
+  // Core systems
+  const memory = new Memory();
+  const sessionManager = new SessionManager();
+  const skills = new SkillsLoader();
+  console.log(`Skills: ${skills.getAll().map((s) => s.name).join(", ") || "(none)"}`);
+
+  // Background services
+  const cronService = new CronService(bus);
+  const subagentManager = new SubagentManager(provider, bus);
+
   // Tools
   const toolRegistry = new ToolRegistry();
   toolRegistry.register(new TimeTool());
@@ -67,13 +83,14 @@ async function main() {
   toolRegistry.register(new ListDirTool());
   toolRegistry.register(new ExecTool());
   toolRegistry.register(new MessageTool(bus));
+  toolRegistry.register(new SkillLoaderTool(skills));
+  toolRegistry.register(new CronTool(cronService));
+  toolRegistry.register(new SpawnTool(subagentManager));
   console.log(`Tools: ${toolRegistry.getToolNames().join(", ")}`);
 
-  // Core systems
-  const memory = new Memory();
-  const sessionManager = new SessionManager();
-  const skills = new SkillsLoader();
-  console.log(`Skills: ${skills.getAll().map((s) => s.name).join(", ") || "(none)"}`);
+  // Wire subagent manager to the registry (after all tools registered)
+  subagentManager.setRegistry(toolRegistry);
+
   const context = new ContextBuilder(config.persona, toolRegistry, memory, skills);
   const agent = new AgentRunner(provider, toolRegistry, config.agent.maxIterations);
 
@@ -125,12 +142,19 @@ async function main() {
     );
   }
 
+  // Heartbeat — smart 2-phase autonomous task checking
+  const heartbeat = new HeartbeatService(bus, agent);
+
   // Start everything
   agentLoop.start();
+  cronService.start();
+  heartbeat.start();
   await channelManager.startAll();
 
   // Graceful shutdown
   const shutdown = async () => {
+    heartbeat.stop();
+    cronService.stop();
     agentLoop.stop();
     await channelManager.stopAll();
     process.exit(0);

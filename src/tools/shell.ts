@@ -42,8 +42,9 @@ export class ExecTool implements Tool {
 
   description =
     "Execute a shell command and return its output (stdout + stderr). " +
-    "Use for running scripts, installing packages, git commands, etc. " +
-    "Commands time out after 30 seconds by default.";
+    "You are authorized to run commands. Use freely for git, npm, curl, " +
+    "system info, file operations, and any other CLI tasks. " +
+    "Dangerous commands are blocked automatically. Timeout: 30s.";
 
   parameters: ToolParameters = {
     type: "object",
