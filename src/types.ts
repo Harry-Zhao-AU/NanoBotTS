@@ -97,6 +97,28 @@ export interface ChannelsConfig {
   telegram: { enabled: boolean; token: string };
 }
 
+/** Configuration for a single MCP server */
+export interface MCPServerConfig {
+  /** Transport type */
+  transport: "stdio" | "sse" | "streamable-http";
+  /** For stdio: command to run */
+  command?: string;
+  /** For stdio: command arguments */
+  args?: string[];
+  /** For stdio: environment variables to pass */
+  env?: Record<string, string>;
+  /** For stdio: working directory */
+  cwd?: string;
+  /** For sse/streamable-http: server URL */
+  url?: string;
+  /** Only register these tools (omit = all) */
+  enabledTools?: string[];
+  /** Timeout per tool call in ms (default: 30000) */
+  toolTimeout?: number;
+  /** Whether to connect on startup (default: true) */
+  enabled?: boolean;
+}
+
 /** Full application configuration */
 export interface AppConfig {
   /** The system prompt / persona for the bot */
@@ -111,4 +133,6 @@ export interface AppConfig {
   };
   /** Channel settings */
   channels: ChannelsConfig;
+  /** MCP server connections */
+  mcpServers?: Record<string, MCPServerConfig>;
 }

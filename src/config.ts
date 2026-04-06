@@ -204,5 +204,6 @@ function mergeConfig(saved: Partial<AppConfig>): AppConfig {
         token: telegramToken,
       },
     },
+    mcpServers: saved.mcpServers,
   };
 }

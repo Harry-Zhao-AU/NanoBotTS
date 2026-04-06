@@ -39,6 +39,7 @@ import { HeartbeatService } from "./heartbeat/service.js";
 import { ChannelManager } from "./channels/manager.js";
 import { CLIChannel } from "./channels/cli.js";
 import { TelegramChannel } from "./channels/telegram.js";
+import { MCPManager } from "./mcp/manager.js";
 
 function parseChannelArg(): string {
   const idx = process.argv.indexOf("--channel");
@@ -86,6 +87,16 @@ async function main() {
   toolRegistry.register(new SkillLoaderTool(skills));
   toolRegistry.register(new CronTool(cronService));
   toolRegistry.register(new SpawnTool(subagentManager));
+
+  // MCP servers — connect and register their tools
+  const mcpManager = new MCPManager();
+  if (config.mcpServers && Object.keys(config.mcpServers).length > 0) {
+    await mcpManager.connectAll(config.mcpServers);
+    for (const tool of mcpManager.getWrappedTools()) {
+      toolRegistry.register(tool);
+    }
+  }
+
   console.log(`Tools: ${toolRegistry.getToolNames().join(", ")}`);
 
   // Wire subagent manager to the registry (after all tools registered)
@@ -156,6 +167,7 @@ async function main() {
     heartbeat.stop();
     cronService.stop();
     agentLoop.stop();
+    await mcpManager.disconnectAll();
     await channelManager.stopAll();
     process.exit(0);
   };

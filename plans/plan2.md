@@ -138,6 +138,33 @@
 
 *See plan3.md for full details.*
 
+### Phase 13: Reasoning Display + CLI UX — PENDING
+
+**Goal:** Surface LLM reasoning tokens and improve the CLI experience from dev prototype to usable tool.
+
+#### 13A: Reasoning Token Passthrough
+
+Capture and display the model's chain-of-thought (e.g., OpenAI o1/o3/o4-mini `reasoning_content`).
+
+- [ ] **13A.1 Extend LLMResponse type** — Add optional `reasoning: string` field to `LLMResponse` in `types.ts`.
+- [ ] **13A.2 Provider extraction** — Update `AzureOpenAIProvider` and `OpenAICompatProvider` to extract `reasoning_content` from API responses (both streaming and non-streaming).
+- [ ] **13A.3 Streaming reasoning chunks** — Reasoning tokens arrive before content tokens. Propagate them through MessageBus as a distinct delta type (e.g., `isDelta: true, isReasoning: true`).
+- [ ] **13A.4 AgentRunner passthrough** — Ensure reasoning is preserved through the agent loop and available to hooks and channels.
+- [ ] **13A.5 Channel display** — CLI renders reasoning in dimmed/grey text. Telegram could use a collapsible `<blockquote>` or spoiler tag. Add `/reasoning on|off` toggle to CLI (default: on).
+
+#### 13B: CLI UX Polish
+
+Improve terminal experience with minimal dependencies (`chalk`, `ora`, `marked-terminal`).
+
+- [ ] **13B.1 Thinking spinner** — Show a spinner (e.g., `ora`) between user input and first streaming token. Stop spinner when first delta arrives.
+- [ ] **13B.2 Terminal colors** — Use `chalk` to distinguish user input, bot output, system messages, errors, and tool activity.
+- [ ] **13B.3 Markdown rendering** — Render LLM markdown output (headers, lists, bold, code blocks) using `marked` + `marked-terminal` for readable terminal output.
+- [ ] **13B.4 Syntax-highlighted code blocks** — Highlight code blocks in LLM responses with language-aware coloring.
+- [ ] **13B.5 Tool execution feedback** — Show which tools are being called during agent runs (e.g., `[calling web_fetch...]`). Implement as an `AgentHook` that emits status lines via the bus.
+- [ ] **13B.6 Input history** — Enable arrow-up recall of previous messages using `readline` history support.
+
+*Dependencies: `chalk`, `ora`, `marked`, `marked-terminal`, `cli-highlight` (~440KB total). No architecture changes — drop-in additions to existing CLIChannel and providers.*
+
 ---
 
 ## Priority Order
@@ -149,6 +176,7 @@ Phase 9      ━━━ Security (important before production use, partially done
 Phase 10     ━━━ More channels (scale, builds on bus)
 Phase 11     ━━━ SDK/API + gateway (final architecture, builds on everything)
 Phase 12     ━━━ Docker + CI/CD (deployment, builds on Phase 11 gateway)
+Phase 13     ━━━ Reasoning display + CLI UX (independent, can start anytime)
 ```
 
 ## Dependency Graph
@@ -159,6 +187,7 @@ flowchart LR
     P1 --> P9["Phase 9\nSecurity"]
     P1 --> P10["Phase 10\nMore Channels"]
     P1 --> P11["Phase 11\nSDK + API + Gateway"]
+    P1 --> P13["Phase 13\nReasoning + CLI UX"]
     P11 --> P12["Phase 12\nDocker + CI/CD"]
     P9 --> P11
 ```
