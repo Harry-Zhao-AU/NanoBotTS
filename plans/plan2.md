@@ -99,11 +99,11 @@
 
 **Goal:** Protect against misuse and dangerous operations.
 
-- [ ] **9.1 SSRF protection** — Validate URLs in web tools against private IP ranges (RFC1918, loopback, link-local, cloud metadata 169.254.x.x). DNS resolution before IP check. Post-redirect validation. Configurable whitelist for trusted CIDRs.
+- [x] **9.1 SSRF protection** — Validate URLs in web tools against private IP ranges (RFC1918, loopback, link-local, cloud metadata 169.254.x.x). DNS resolution before IP check. Post-redirect validation. Configurable whitelist for trusted CIDRs.
 - [x] **9.2 Shell deny-list** — Already implemented in `tools/shell.ts`. Block dangerous commands.
-- [ ] **9.3 Workspace restriction** — Filesystem tools restricted to configured workspace directory. Validate resolved paths stay within boundary.
-- [ ] **9.4 Channel permissions** — Per-channel allowlists for users/groups. Permission check in channel `_handle_message()` before publishing to bus.
-- [ ] **9.5 URL extraction scanning** — Scan shell commands for embedded URLs and validate them against SSRF rules before execution.
+- [x] **9.3 Workspace restriction** — Filesystem tools restricted to configured workspace directory. Validate resolved paths stay within boundary.
+- [x] **9.4 Channel permissions** — Per-channel allowlists for users/groups. Permission check in channel `_handle_message()` before publishing to bus.
+- [x] **9.5 URL extraction scanning** — Scan shell commands for embedded URLs and validate them against SSRF rules before execution.
 
 *Note: Original nanobot only implements SSRF (9.1). Items 9.2-9.5 are our additions — broader than original.*
 

@@ -7,6 +7,7 @@
 
 import { exec } from "node:child_process";
 import { Tool, ToolParameters } from "./base.js";
+import { validateUrl, extractUrls } from "../security/ssrf.js";
 
 /** Commands that should never be executed */
 const DENY_LIST = [
@@ -71,6 +72,16 @@ export class ExecTool implements Tool {
 
     if (isDenied(command)) {
       return `Error: Command denied for safety: "${command}"`;
+    }
+
+    // Scan for embedded URLs and block SSRF attempts
+    const urls = extractUrls(command);
+    for (const url of urls) {
+      try {
+        await validateUrl(url);
+      } catch (err) {
+        return `Error: ${(err as Error).message} (in command URL)`;
+      }
     }
 
     return new Promise<string>((resolve) => {

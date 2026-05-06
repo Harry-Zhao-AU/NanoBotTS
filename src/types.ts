@@ -119,6 +119,19 @@ export interface MCPServerConfig {
   enabled?: boolean;
 }
 
+/** Security policies */
+export interface SecurityConfig {
+  /** Filesystem tools are restricted to this directory (absolute path). Defaults to cwd. */
+  workspace?: string;
+  /** Per-channel access control */
+  channels?: {
+    telegram?: {
+      /** If non-empty, only these Telegram user IDs (as strings) may interact with the bot */
+      allowedUserIds?: string[];
+    };
+  };
+}
+
 /** Full application configuration */
 export interface AppConfig {
   /** The system prompt / persona for the bot */
@@ -135,4 +148,6 @@ export interface AppConfig {
   channels: ChannelsConfig;
   /** MCP server connections */
   mcpServers?: Record<string, MCPServerConfig>;
+  /** Security policies */
+  security?: SecurityConfig;
 }

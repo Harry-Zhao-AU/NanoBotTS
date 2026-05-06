@@ -7,6 +7,7 @@
 
 import { Tool, ToolParameters } from "./base.js";
 import { htmlToText, DEFAULT_USER_AGENT } from "../utils/html.js";
+import { validateUrl } from "../security/ssrf.js";
 
 const MAX_CONTENT_LENGTH = 50000; // ~12.5K tokens
 
@@ -39,6 +40,12 @@ export class WebFetchTool implements Tool {
     }
 
     try {
+      await validateUrl(url);
+    } catch (err) {
+      return `Error: ${(err as Error).message}`;
+    }
+
+    try {
       const response = await fetch(url, {
         headers: {
           "User-Agent": DEFAULT_USER_AGENT,
@@ -46,6 +53,15 @@ export class WebFetchTool implements Tool {
         },
         signal: AbortSignal.timeout(15000), // 15s timeout
       });
+
+      // Post-redirect check — validate final URL after any redirects
+      if (response.url && response.url !== url) {
+        try {
+          await validateUrl(response.url);
+        } catch (err) {
+          return `Error: ${(err as Error).message} (after redirect)`;
+        }
+      }
 
       if (!response.ok) {
         return `Error: HTTP ${response.status} ${response.statusText}`;

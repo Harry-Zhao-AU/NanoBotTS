@@ -205,5 +205,6 @@ function mergeConfig(saved: Partial<AppConfig>): AppConfig {
       },
     },
     mcpServers: saved.mcpServers,
+    security: saved.security,
   };
 }

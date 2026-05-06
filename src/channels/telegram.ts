@@ -41,18 +41,22 @@ export class TelegramChannel implements Channel {
   /** Active streaming states per chatId */
   private streams: Map<string, StreamState> = new Map();
 
+  private allowedUserIds: Set<string>;
+
   constructor(
     token: string,
     bus: MessageBus,
     context: ContextBuilder,
     memory: Memory,
     sessionManager: SessionManager,
+    allowedUserIds?: string[],
   ) {
     this.bot = new Telegraf(token);
     this.bus = bus;
     this.context = context;
     this.memory = memory;
     this.sessionManager = sessionManager;
+    this.allowedUserIds = new Set(allowedUserIds ?? []);
 
     this.setupHandlers();
   }
@@ -179,6 +183,11 @@ export class TelegramChannel implements Channel {
       const sessionKey = `tg_${chatId}`;
       const userName = ctx.from.first_name || `User ${chatId}`;
       const userMessage = ctx.message.text;
+
+      if (this.allowedUserIds.size > 0 && !this.allowedUserIds.has(String(ctx.from.id))) {
+        await ctx.reply("Sorry, you are not authorized to use this bot.");
+        return;
+      }
 
       console.log(`\n[@${this.botName}] ${userName}: ${userMessage}`);
 

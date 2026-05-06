@@ -9,9 +9,22 @@ import fs from "node:fs";
 import path from "node:path";
 import { Tool, ToolParameters } from "./base.js";
 
-/** Resolve a path safely within the workspace */
-function resolvePath(filePath: string): string {
-  return path.resolve(filePath);
+/**
+ * Resolve a path, enforcing it stays within the workspace if one is set.
+ * Returns the resolved path on success, or an error string if blocked.
+ */
+function resolvePath(
+  filePath: string,
+  workspace?: string,
+): { resolved: string } | { error: string } {
+  const resolved = path.resolve(filePath);
+  if (!workspace) return { resolved };
+
+  const wsNorm = path.resolve(workspace);
+  if (resolved !== wsNorm && !resolved.startsWith(wsNorm + path.sep)) {
+    return { error: `Access denied: path is outside the workspace (${wsNorm})` };
+  }
+  return { resolved };
 }
 
 // ── read_file ──────────────────────────────────────────────────
@@ -20,6 +33,8 @@ export class ReadFileTool implements Tool {
   name = "read_file";
   readOnly = true;
   concurrencySafe = true;
+
+  constructor(private workspace?: string) {}
 
   description =
     "Read the contents of a file. Returns the file content with line numbers. " +
@@ -45,7 +60,9 @@ export class ReadFileTool implements Tool {
   };
 
   async execute(args: Record<string, unknown>): Promise<string> {
-    const filePath = resolvePath(args.path as string);
+    const result = resolvePath(args.path as string, this.workspace);
+    if ("error" in result) return `Error: ${result.error}`;
+    const filePath = result.resolved;
     const offset = ((args.offset as number) || 1) - 1; // convert to 0-based
     const limit = (args.limit as number) || 200;
 
@@ -88,6 +105,8 @@ export class WriteFileTool implements Tool {
   readOnly = false;
   concurrencySafe = false;
 
+  constructor(private workspace?: string) {}
+
   description =
     "Write content to a file. Creates the file if it doesn't exist. " +
     "Creates parent directories automatically. Overwrites existing content.";
@@ -108,7 +127,9 @@ export class WriteFileTool implements Tool {
   };
 
   async execute(args: Record<string, unknown>): Promise<string> {
-    const filePath = resolvePath(args.path as string);
+    const result = resolvePath(args.path as string, this.workspace);
+    if ("error" in result) return `Error: ${result.error}`;
+    const filePath = result.resolved;
     const content = args.content as string;
 
     // Auto-create parent directories
@@ -129,6 +150,8 @@ export class EditFileTool implements Tool {
   name = "edit_file";
   readOnly = false;
   concurrencySafe = false;
+
+  constructor(private workspace?: string) {}
 
   description =
     "Edit a file by replacing a specific string with a new string. " +
@@ -159,7 +182,9 @@ export class EditFileTool implements Tool {
   };
 
   async execute(args: Record<string, unknown>): Promise<string> {
-    const filePath = resolvePath(args.path as string);
+    const result = resolvePath(args.path as string, this.workspace);
+    if ("error" in result) return `Error: ${result.error}`;
+    const filePath = result.resolved;
     const oldString = args.old_string as string;
     const newString = args.new_string as string;
     const replaceAll = (args.replace_all as boolean) || false;
@@ -195,6 +220,8 @@ export class ListDirTool implements Tool {
   readOnly = true;
   concurrencySafe = true;
 
+  constructor(private workspace?: string) {}
+
   description =
     "List files and directories at a given path. " +
     "Set recursive to true for a tree view (max 3 levels deep).";
@@ -215,7 +242,9 @@ export class ListDirTool implements Tool {
   };
 
   async execute(args: Record<string, unknown>): Promise<string> {
-    const dirPath = resolvePath((args.path as string) || ".");
+    const result = resolvePath((args.path as string) || ".", this.workspace);
+    if ("error" in result) return `Error: ${result.error}`;
+    const dirPath = result.resolved;
     const recursive = (args.recursive as boolean) || false;
 
     try {

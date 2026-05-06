@@ -73,15 +73,17 @@ async function main() {
   const cronService = new CronService(bus);
   const subagentManager = new SubagentManager(provider, bus);
 
+  const workspace = config.security?.workspace;
+
   // Tools
   const toolRegistry = new ToolRegistry();
   toolRegistry.register(new TimeTool());
   toolRegistry.register(new WebSearchTool());
   toolRegistry.register(new WebFetchTool());
-  toolRegistry.register(new ReadFileTool());
-  toolRegistry.register(new WriteFileTool());
-  toolRegistry.register(new EditFileTool());
-  toolRegistry.register(new ListDirTool());
+  toolRegistry.register(new ReadFileTool(workspace));
+  toolRegistry.register(new WriteFileTool(workspace));
+  toolRegistry.register(new EditFileTool(workspace));
+  toolRegistry.register(new ListDirTool(workspace));
   toolRegistry.register(new ExecTool());
   toolRegistry.register(new MessageTool(bus));
   toolRegistry.register(new SkillLoaderTool(skills));
@@ -149,6 +151,7 @@ async function main() {
         context,
         memory,
         sessionManager,
+        config.security?.channels?.telegram?.allowedUserIds,
       ),
     );
   }
